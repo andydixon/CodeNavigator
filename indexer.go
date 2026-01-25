@@ -57,26 +57,54 @@ type Snapshot struct {
 	released         map[uint32]bool
 }
 
-type definitionPattern struct {
-	kind string
-	re   *regexp.Regexp
+// Each pattern has a cheap literal prefilter that is a necessary condition for a match,
+// so the (much slower) regexp only runs on candidate lines.
+type pattern struct {
+	kind  string
+	maybe func(line string) bool
+	re    *regexp.Regexp
 }
 
-var definitionPatterns = []definitionPattern{
-	{"class", regexp.MustCompile(`(?:class|struct|enum|trait|interface|record)\s+([A-Za-z_][A-Za-z0-9_]*)`)},
-	{"function", regexp.MustCompile(`(?:fn|func|def|function)\s+([A-Za-z_][A-Za-z0-9_]*)`)},
-	{"function", regexp.MustCompile(`(?:public|private|protected|static|async|export|const|let|var|unsafe|pub|virtual|override|inline|final|synchronized|abstract|extern|\s)+\s*([A-Za-z_][A-Za-z0-9_]*)\s*\([^;]*\)\s*(?:\{|=>|throws)`)},
+func containsAny(literals ...string) func(string) bool {
+	return func(line string) bool {
+		for _, literal := range literals {
+			if strings.Contains(line, literal) {
+				return true
+			}
+		}
+		return false
+	}
 }
 
-var importPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`from\s+["']?([^"';\s]+)`),
-	regexp.MustCompile(`import\s*["']([^"']+)`),
-	regexp.MustCompile(`^\s*import\s+([A-Za-z_][A-Za-z0-9_.]*)\s*(?:;|$|\bas\b)`),
-	regexp.MustCompile(`import\s*\(\s*["']([^"']+)`),
-	regexp.MustCompile(`require\s*\(\s*["']([^"']+)`),
-	regexp.MustCompile(`#include\s*[<"]([^>"]+)`),
-	regexp.MustCompile(`(?:use|mod)\s+([A-Za-z_][A-Za-z0-9_:]*)`),
-	regexp.MustCompile(`using\s+([A-Za-z_][A-Za-z0-9_.]*)`),
+// callWithBody needs "(", then ")", then "{", "=>" or "throws" after that ")".
+func callWithBody(line string) bool {
+	open := strings.IndexByte(line, '(')
+	if open < 0 {
+		return false
+	}
+	close := strings.IndexByte(line[open:], ')')
+	if close < 0 {
+		return false
+	}
+	tail := line[open+close:]
+	return strings.Contains(tail, "{") || strings.Contains(tail, "=>") || strings.Contains(tail, "throws")
+}
+
+var definitionPatterns = []pattern{
+	{"class", containsAny("class", "struct", "enum", "trait", "interface", "record"), regexp.MustCompile(`(?:class|struct|enum|trait|interface|record)\s+([A-Za-z_][A-Za-z0-9_]*)`)},
+	{"function", containsAny("fn", "func", "def"), regexp.MustCompile(`(?:fn|func|def|function)\s+([A-Za-z_][A-Za-z0-9_]*)`)},
+	{"function", callWithBody, regexp.MustCompile(`(?:public|private|protected|static|async|export|const|let|var|unsafe|pub|virtual|override|inline|final|synchronized|abstract|extern|\s)+\s*([A-Za-z_][A-Za-z0-9_]*)\s*\([^;]*\)\s*(?:\{|=>|throws)`)},
+}
+
+var importPatterns = []pattern{
+	{"", containsAny("from"), regexp.MustCompile(`from\s+["']?([^"';\s]+)`)},
+	{"", containsAny("import"), regexp.MustCompile(`import\s*["']([^"']+)`)},
+	{"", containsAny("import"), regexp.MustCompile(`^\s*import\s+([A-Za-z_][A-Za-z0-9_.]*)\s*(?:;|$|\bas\b)`)},
+	{"", containsAny("import"), regexp.MustCompile(`import\s*\(\s*["']([^"']+)`)},
+	{"", containsAny("require"), regexp.MustCompile(`require\s*\(\s*["']([^"']+)`)},
+	{"", containsAny("#include"), regexp.MustCompile(`#include\s*[<"]([^>"]+)`)},
+	{"", containsAny("use", "mod"), regexp.MustCompile(`(?:use|mod)\s+([A-Za-z_][A-Za-z0-9_:]*)`)},
+	{"", containsAny("using"), regexp.MustCompile(`using\s+([A-Za-z_][A-Za-z0-9_.]*)`)},
 }
 
 var complexityTokens = []string{" if ", " for ", " while ", " match ", " switch ", "&&", "||"}
@@ -209,6 +237,9 @@ func parseFile(root, path string) (*FileRecord, string) {
 		}
 		if mayDefine(line) {
 			for _, pattern := range definitionPatterns {
+				if !pattern.maybe(line) {
+					continue
+				}
 				if m := pattern.re.FindStringSubmatchIndex(line); m != nil && m[2] >= 0 {
 					record.Symbols = append(record.Symbols, Symbol{strings.Clone(line[m[2]:m[3]]), pattern.kind, record.Lines, strings.Clone(truncateRunes(strings.TrimSpace(line), 180))})
 					break
@@ -216,8 +247,11 @@ func parseFile(root, path string) (*FileRecord, string) {
 			}
 		}
 		if mayImport(line) {
-			for _, re := range importPatterns {
-				if m := re.FindStringSubmatchIndex(line); m != nil && m[2] >= 0 {
+			for _, pattern := range importPatterns {
+				if !pattern.maybe(line) {
+					continue
+				}
+				if m := pattern.re.FindStringSubmatchIndex(line); m != nil && m[2] >= 0 {
 					record.Imports = append(record.Imports, strings.Clone(line[m[2]:m[3]]))
 				}
 			}

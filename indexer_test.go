@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -63,8 +64,8 @@ func TestResolvesDottedModulesAsInferred(t *testing.T) {
 
 func TestExtractsNamedJavaScriptImportTarget(t *testing.T) {
 	var imports []string
-	for _, re := range importPatterns {
-		if m := re.FindStringSubmatch("import { render } from './renderer.js';"); m != nil {
+	for _, p := range importPatterns {
+		if m := p.re.FindStringSubmatch("import { render } from './renderer.js';"); m != nil {
 			imports = append(imports, m[1])
 		}
 	}
@@ -205,5 +206,21 @@ func TestGitignoreHonouredInsideCheckout(t *testing.T) {
 func TestEmptyDirectoryFails(t *testing.T) {
 	if _, err := indexDirectory(t.TempDir(), func(string, int, int, string) {}); err == nil {
 		t.Fatal("expected error for empty directory")
+	}
+}
+
+// BenchmarkIndexDirectory indexes CODENAV_BENCH_DIR, defaulting to the Go standard library source.
+func BenchmarkIndexDirectory(b *testing.B) {
+	dir := os.Getenv("CODENAV_BENCH_DIR")
+	if dir == "" {
+		dir = filepath.Join(runtime.GOROOT(), "src")
+	}
+	if _, err := os.Stat(dir); err != nil {
+		b.Skip("no benchmark corpus:", err)
+	}
+	for b.Loop() {
+		if _, err := indexDirectory(dir, func(string, int, int, string) {}); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

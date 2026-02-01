@@ -195,6 +195,7 @@ func parseFile(root, path string) (*FileRecord, string) {
 	}
 	text := string(data)
 	if !utf8.ValidString(text) {
+		// ponytail: one U+FFFD per run of invalid bytes (Rust emits one per maximal subpart); only binary-ish previews differ.
 		text = strings.ToValidUTF8(text, "�")
 	}
 	relative, err := filepath.Rel(root, path)

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/rand"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -19,7 +20,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -620,10 +620,9 @@ func safeRelativePath(value string) (string, bool) {
 	return filepath.Join(clean...), true
 }
 
-var idCounter atomic.Uint64
-
+// uniqueID is unguessable: IDs are the capability that grants access to a job or snapshot.
 func uniqueID(prefix string) string {
-	return fmt.Sprintf("%s-%x%x", prefix, time.Now().UnixNano(), idCounter.Add(1))
+	return prefix + "-" + rand.Text()
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {

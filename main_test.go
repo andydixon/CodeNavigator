@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -67,14 +68,21 @@ func TestPathValidation(t *testing.T) {
 }
 
 type client struct {
-	t   *testing.T
-	url string
+	t    *testing.T
+	url  string
+	http *http.Client
+}
+
+// stranger is a different browser session against the same server.
+func (c client) stranger() client {
+	jar, _ := cookiejar.New(nil)
+	return client{c.t, c.url, &http.Client{Jar: jar}}
 }
 
 func (c client) do(method, path, body string) (int, []byte) {
 	c.t.Helper()
 	req, _ := http.NewRequest(method, c.url+path, strings.NewReader(body))
-	res, err := http.DefaultClient.Do(req)
+	res, err := c.http.Do(req)
 	if err != nil {
 		c.t.Fatal(err)
 	}
@@ -100,7 +108,7 @@ func newTestServer(t *testing.T) (*Server, client) {
 	server := NewServer(filepath.Join(t.TempDir(), "codenavigator"))
 	ts := httptest.NewServer(server)
 	t.Cleanup(ts.Close)
-	return server, client{t, ts.URL}
+	return server, client{t, ts.URL, nil}.stranger()
 }
 
 func TestLocalJobLifecycle(t *testing.T) {
@@ -118,7 +126,7 @@ func TestLocalJobLifecycle(t *testing.T) {
 	c.json("POST", "/api/jobs/"+created.JobID+"/files?path=..%2Fescape.js", "x", 400, nil)
 	c.json("POST", "/api/jobs/"+created.JobID+"/commit", "", 202, nil)
 
-	res, err := http.Get(c.url + "/api/jobs/" + created.JobID + "/events")
+	res, err := c.http.Get(c.url + "/api/jobs/" + created.JobID + "/events")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,6 +146,12 @@ func TestLocalJobLifecycle(t *testing.T) {
 		t.Fatalf("final job event = %+v", job)
 	}
 	snapshotURL := "/api/snapshots/" + *job.SnapshotID
+
+	other := c.stranger()
+	other.json("GET", "/api/jobs/"+created.JobID, "", 404, nil)
+	other.json("POST", "/api/jobs/"+created.JobID+"/files?path=evil.js", "x", 404, nil)
+	other.json("GET", snapshotURL+"/scene", "", 404, nil)
+	other.json("GET", snapshotURL+"/entities/1/source", "", 404, nil)
 
 	var summary map[string]any
 	c.json("GET", snapshotURL, "", 200, &summary)
@@ -254,4 +268,21 @@ func must[T any](v T, err error) T {
 		panic(fmt.Sprint(err))
 	}
 	return v
+}
+
+func TestSessionCookieFlags(t *testing.T) {
+	_, c := newTestServer(t)
+	req, _ := http.NewRequest("POST", c.url+"/api/jobs", strings.NewReader(`{"kind":"local"}`))
+	req.Header.Set("X-Forwarded-Proto", "https")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	cookie := res.Header.Get("Set-Cookie")
+	for _, want := range []string{sessionCookie + "=", "HttpOnly", "Secure", "SameSite=Lax", "Path=/"} {
+		if !strings.Contains(cookie, want) {
+			t.Errorf("Set-Cookie %q missing %q", cookie, want)
+		}
+	}
 }

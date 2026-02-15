@@ -46,6 +46,7 @@ type Edge struct {
 
 type Snapshot struct {
 	ID, Name, Source string
+	Owner            string // session that created the snapshot
 	Files            []FileRecord
 	Edges            []Edge
 	TotalLines       int

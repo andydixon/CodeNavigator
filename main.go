@@ -39,6 +39,7 @@ type Job struct {
 	Error      *string  `json:"error"`
 	Warnings   []string `json:"warnings"`
 	root       string
+	owner      string // session that created the job
 }
 
 type Server struct {
@@ -126,6 +127,7 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "Invalid job request")
 		return
 	}
+	owner := sessionID(w, r)
 	url := ""
 	if request.Kind == "github" {
 		if request.URL == nil {
@@ -143,7 +145,7 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
-	job := &Job{ID: id, SourceKind: request.Kind, Name: "Local codebase", Phase: "receiving", Message: "Waiting for files…", Warnings: []string{}, root: root}
+	job := &Job{ID: id, SourceKind: request.Kind, Name: "Local codebase", Phase: "receiving", Message: "Waiting for files…", Warnings: []string{}, root: root, owner: owner}
 	if request.Name != nil {
 		job.Name = *request.Name
 	}
@@ -173,6 +175,10 @@ func (s *Server) jobRoute(w http.ResponseWriter, r *http.Request, parts []string
 	id, action := parts[0], ""
 	if len(parts) > 1 {
 		action = parts[1]
+	}
+	if job, ok := s.jobSnapshot(id); !ok || job.owner != sessionID(nil, r) {
+		writeError(w, 404, "Unknown job")
+		return
 	}
 	switch {
 	case r.Method == http.MethodGet && action == "":
@@ -247,7 +253,7 @@ func (s *Server) snapshotRoute(w http.ResponseWriter, r *http.Request, parts []s
 	id, action := part(0), part(1)
 	s.snapshotsMu.Lock()
 	snapshot := s.snapshots[id]
-	if snapshot == nil {
+	if snapshot == nil || snapshot.Owner != sessionID(nil, r) {
 		s.snapshotsMu.Unlock()
 		writeError(w, 404, "Unknown snapshot")
 		return
@@ -508,7 +514,7 @@ func (s *Server) indexJob(id, root string) {
 	}
 	s.jobsMu.Lock()
 	if job := s.jobs[id]; job != nil {
-		snapshot.Name, snapshot.Source = job.Name, job.SourceKind
+		snapshot.Name, snapshot.Source, snapshot.Owner = job.Name, job.SourceKind, job.owner
 	}
 	s.jobsMu.Unlock()
 	snapshot.ID = uniqueID("snapshot")
@@ -618,6 +624,31 @@ func safeRelativePath(value string) (string, bool) {
 		return "", false
 	}
 	return filepath.Join(clean...), true
+}
+
+const sessionCookie = "codenav_session"
+
+// sessionID returns the caller's session, issuing a cookie when w is non-nil and none exists.
+// Jobs and snapshots are only visible to the session that created them. Without w a
+// missing session returns "", which never matches an owner.
+func sessionID(w http.ResponseWriter, r *http.Request) string {
+	if cookie, err := r.Cookie(sessionCookie); err == nil && len(cookie.Value) >= 26 && len(cookie.Value) <= 64 {
+		return cookie.Value
+	}
+	if w == nil {
+		return ""
+	}
+	id := rand.Text()
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookie,
+		Value:    id,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
+		SameSite: http.SameSiteLaxMode,
+	})
+	r.AddCookie(&http.Cookie{Name: sessionCookie, Value: id}) // later lookups in this request see it
+	return id
 }
 
 // uniqueID is unguessable: IDs are the capability that grants access to a job or snapshot.

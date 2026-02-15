@@ -519,13 +519,15 @@ func (s *Server) indexJob(id, root string) {
 	s.jobsMu.Unlock()
 	snapshot.ID = uniqueID("snapshot")
 
-	// Only the latest snapshot is kept; older workspaces are deleted.
+	// Each session keeps only its latest snapshot; its older workspaces are deleted.
 	s.snapshotsMu.Lock()
 	var oldRoots []string
-	for _, old := range s.snapshots {
-		oldRoots = append(oldRoots, old.Root)
+	for key, old := range s.snapshots {
+		if old.Owner == snapshot.Owner {
+			oldRoots = append(oldRoots, old.Root)
+			delete(s.snapshots, key)
+		}
 	}
-	clear(s.snapshots)
 	s.snapshots[snapshot.ID] = snapshot
 	s.snapshotsMu.Unlock()
 	for _, old := range oldRoots {

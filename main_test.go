@@ -286,3 +286,40 @@ func TestSessionCookieFlags(t *testing.T) {
 		}
 	}
 }
+
+// indexLocal uploads files as a local job and waits for the snapshot.
+func (c client) indexLocal(files map[string]string) (jobID, snapshotID string) {
+	c.t.Helper()
+	var created struct{ JobID string }
+	c.json("POST", "/api/jobs", `{"kind":"local"}`, 201, &created)
+	for path, content := range files {
+		c.json("POST", "/api/jobs/"+created.JobID+"/files?path="+path, content, 200, nil)
+	}
+	c.json("POST", "/api/jobs/"+created.JobID+"/commit", "", 202, nil)
+	status, raw := c.do("GET", "/api/jobs/"+created.JobID+"/events", "")
+	var job Job
+	for line := range strings.Lines(string(raw)) {
+		if data, ok := strings.CutPrefix(line, "data: "); ok {
+			json.Unmarshal([]byte(data), &job)
+		}
+	}
+	if status != 200 || job.SnapshotID == nil {
+		c.t.Fatalf("job did not finish: %d %+v", status, job)
+	}
+	return created.JobID, *job.SnapshotID
+}
+
+func TestSessionsKeepIndependentSnapshots(t *testing.T) {
+	server, alice := newTestServer(t)
+	bob := alice.stranger()
+	_, aliceFirst := alice.indexLocal(map[string]string{"a.go": "package a"})
+	_, bobSnapshot := bob.indexLocal(map[string]string{"b.go": "package b"})
+	_, aliceSecond := alice.indexLocal(map[string]string{"c.go": "package c"})
+
+	alice.json("GET", "/api/snapshots/"+aliceFirst, "", 404, nil)
+	alice.json("GET", "/api/snapshots/"+aliceSecond, "", 200, nil)
+	bob.json("GET", "/api/snapshots/"+bobSnapshot, "", 200, nil)
+	if len(server.snapshots) != 2 {
+		t.Fatalf("snapshots = %d, want 2", len(server.snapshots))
+	}
+}

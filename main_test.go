@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDeliveryRangesMergeBeforeSourceIsReleased(t *testing.T) {
@@ -322,4 +323,41 @@ func TestSessionsKeepIndependentSnapshots(t *testing.T) {
 	if len(server.snapshots) != 2 {
 		t.Fatalf("snapshots = %d, want 2", len(server.snapshots))
 	}
+}
+
+func TestExpireDropsIdleSnapshotsAndAbandonedUploads(t *testing.T) {
+	server, c := newTestServer(t)
+	_, snapshot := c.indexLocal(map[string]string{"a.go": "package a"})
+	var pending struct{ JobID string }
+	c.json("POST", "/api/jobs", `{"kind":"local"}`, 201, &pending)
+	c.json("POST", "/api/jobs/"+pending.JobID+"/files?path=b.go", "package b", 200, nil)
+	snapshotRoot := server.snapshots[snapshot].Root
+	pendingRoot := server.jobs[pending.JobID].root
+
+	server.expire(time.Now())
+	c.json("GET", "/api/snapshots/"+snapshot, "", 200, nil)
+
+	server.expire(time.Now().Add(idleExpiry + time.Minute))
+	c.json("GET", "/api/snapshots/"+snapshot, "", 404, nil)
+	c.json("GET", "/api/jobs/"+pending.JobID, "", 404, nil)
+	for _, root := range []string{snapshotRoot, pendingRoot} {
+		if _, err := os.Stat(root); !os.IsNotExist(err) {
+			t.Errorf("workspace %s should be deleted", root)
+		}
+	}
+	if len(server.jobs) != 0 {
+		t.Errorf("jobs left: %d", len(server.jobs))
+	}
+}
+
+func TestSnapshotCapEvictsLeastRecentlyUsed(t *testing.T) {
+	server, first := newTestServer(t)
+	_, oldest := first.indexLocal(map[string]string{"a.go": "package a"})
+	for i := range maxSnapshots {
+		first.stranger().indexLocal(map[string]string{"a.go": fmt.Sprint("package p", i)})
+	}
+	if len(server.snapshots) != maxSnapshots {
+		t.Fatalf("snapshots = %d, want %d", len(server.snapshots), maxSnapshots)
+	}
+	first.json("GET", "/api/snapshots/"+oldest, "", 404, nil)
 }

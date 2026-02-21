@@ -39,8 +39,14 @@ type Job struct {
 	Error      *string  `json:"error"`
 	Warnings   []string `json:"warnings"`
 	root       string
-	owner      string // session that created the job
+	owner      string    // session that created the job
+	updated    time.Time // last progress, used to expire abandoned jobs
 }
+
+const (
+	idleExpiry   = time.Hour // snapshots unused and jobs untouched for this long are dropped
+	maxSnapshots = 8         // ponytail: fixed cap sized for the 2GB container; make it configurable if memory changes
+)
 
 type Server struct {
 	jobsMu      sync.Mutex
@@ -76,12 +82,18 @@ func main() {
 	open := flag.Bool("open", false, "open the viewer in a browser")
 	flag.Parse()
 
+	handler := NewServer(filepath.Join(os.TempDir(), "codenavigator"))
 	server := &http.Server{
 		Addr:              fmt.Sprintf("0.0.0.0:%d", port),
-		Handler:           NewServer(filepath.Join(os.TempDir(), "codenavigator")),
+		Handler:           handler,
 		ReadHeaderTimeout: 30 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
+	go func() {
+		for now := range time.Tick(time.Minute) {
+			handler.expire(now)
+		}
+	}()
 	log.Printf("CodeNavigator listening on http://127.0.0.1:%d", port)
 	if *open {
 		_ = exec.Command("xdg-open", fmt.Sprintf("http://127.0.0.1:%d", port)).Start()
@@ -145,7 +157,7 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
-	job := &Job{ID: id, SourceKind: request.Kind, Name: "Local codebase", Phase: "receiving", Message: "Waiting for files…", Warnings: []string{}, root: root, owner: owner}
+	job := &Job{ID: id, SourceKind: request.Kind, Name: "Local codebase", Phase: "receiving", Message: "Waiting for files…", Warnings: []string{}, root: root, owner: owner, updated: time.Now()}
 	if request.Name != nil {
 		job.Name = *request.Name
 	}
@@ -210,6 +222,7 @@ func (s *Server) jobRoute(w http.ResponseWriter, r *http.Request, parts []string
 			job.Completed++
 			job.Total = job.Completed
 			job.Message = fmt.Sprintf("Received %d files", job.Completed)
+			job.updated = time.Now()
 		}
 		s.jobsMu.Unlock()
 		writeJSON(w, 200, map[string]bool{"ok": true})
@@ -258,6 +271,7 @@ func (s *Server) snapshotRoute(w http.ResponseWriter, r *http.Request, parts []s
 		writeError(w, 404, "Unknown snapshot")
 		return
 	}
+	snapshot.lastUsed = time.Now()
 	switch action {
 	case "":
 		body := map[string]any{
@@ -528,7 +542,18 @@ func (s *Server) indexJob(id, root string) {
 			delete(s.snapshots, key)
 		}
 	}
+	snapshot.lastUsed = time.Now()
 	s.snapshots[snapshot.ID] = snapshot
+	for len(s.snapshots) > maxSnapshots {
+		oldest := snapshot
+		for _, candidate := range s.snapshots {
+			if candidate.lastUsed.Before(oldest.lastUsed) {
+				oldest = candidate
+			}
+		}
+		oldRoots = append(oldRoots, oldest.Root)
+		delete(s.snapshots, oldest.ID)
+	}
 	s.snapshotsMu.Unlock()
 	for _, old := range oldRoots {
 		if old != root {
@@ -539,10 +564,40 @@ func (s *Server) indexJob(id, root string) {
 	s.jobsMu.Lock()
 	if job := s.jobs[id]; job != nil {
 		job.Phase, job.Message = "ready", "Landscape ready"
+		job.updated = time.Now()
 		job.SnapshotID = &snapshot.ID
 		job.Completed = max(job.Total, job.Completed)
 	}
 	s.jobsMu.Unlock()
+}
+
+// expire drops snapshots idle since before now-idleExpiry, finished jobs, and uploads
+// that were abandoned before commit, deleting their workspaces.
+func (s *Server) expire(now time.Time) {
+	cutoff := now.Add(-idleExpiry)
+	var roots []string
+	s.snapshotsMu.Lock()
+	for id, snapshot := range s.snapshots {
+		if snapshot.lastUsed.Before(cutoff) {
+			roots = append(roots, snapshot.Root)
+			delete(s.snapshots, id)
+		}
+	}
+	s.snapshotsMu.Unlock()
+	s.jobsMu.Lock()
+	for id, job := range s.jobs {
+		finished := job.SnapshotID != nil || job.Error != nil
+		if job.updated.Before(cutoff) && (finished || job.Phase == "receiving") {
+			if job.Phase == "receiving" {
+				roots = append(roots, job.root)
+			}
+			delete(s.jobs, id)
+		}
+	}
+	s.jobsMu.Unlock()
+	for _, root := range roots {
+		s.removeWorkspace(root)
+	}
 }
 
 func (s *Server) updateJob(id, phase string, completed, total int, message string) {
@@ -550,6 +605,7 @@ func (s *Server) updateJob(id, phase string, completed, total int, message strin
 	defer s.jobsMu.Unlock()
 	if job := s.jobs[id]; job != nil {
 		job.Phase, job.Completed, job.Total, job.Message = phase, completed, total, message
+		job.updated = time.Now()
 	}
 }
 
@@ -558,6 +614,7 @@ func (s *Server) failJob(id, message string) {
 	defer s.jobsMu.Unlock()
 	if job := s.jobs[id]; job != nil {
 		job.Phase, job.Message, job.Error = "error", "Indexing failed", &message
+		job.updated = time.Now()
 	}
 }
 

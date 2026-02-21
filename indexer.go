@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unicode/utf8"
 )
 
@@ -54,6 +55,7 @@ type Snapshot struct {
 	References       int
 	Warnings         []string
 	Root             string
+	lastUsed         time.Time
 	delivered        map[uint32][][2]int
 	released         map[uint32]bool
 }

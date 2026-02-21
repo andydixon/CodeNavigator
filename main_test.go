@@ -361,3 +361,32 @@ func TestSnapshotCapEvictsLeastRecentlyUsed(t *testing.T) {
 	}
 	first.json("GET", "/api/snapshots/"+oldest, "", 404, nil)
 }
+
+func TestIndexingQueuesBeyondConcurrencyLimit(t *testing.T) {
+	server, c := newTestServer(t)
+	for range maxIndexing {
+		server.indexSlots <- struct{}{}
+	}
+	var created struct{ JobID string }
+	c.json("POST", "/api/jobs", `{"kind":"local"}`, 201, &created)
+	c.json("POST", "/api/jobs/"+created.JobID+"/files?path=a.go", "package a", 200, nil)
+	c.json("POST", "/api/jobs/"+created.JobID+"/commit", "", 202, nil)
+	var job Job
+	for range 100 {
+		if c.json("GET", "/api/jobs/"+created.JobID, "", 200, &job); job.Phase == "queued" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if job.Phase != "queued" {
+		t.Fatalf("phase = %q, want queued", job.Phase)
+	}
+	<-server.indexSlots
+	for range 200 {
+		if c.json("GET", "/api/jobs/"+created.JobID, "", 200, &job); job.SnapshotID != nil {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("job never finished after a slot was freed: %+v", job)
+}

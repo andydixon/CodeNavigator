@@ -45,7 +45,8 @@ type Job struct {
 
 const (
 	idleExpiry   = time.Hour // snapshots unused and jobs untouched for this long are dropped
-	maxSnapshots = 8         // ponytail: fixed cap sized for the 2GB container; make it configurable if memory changes
+	maxSnapshots = 8         // ponytail: fixed caps sized for the 2GB container; make them configurable if memory changes
+	maxIndexing  = 2         // concurrent index runs; each already uses every CPU
 )
 
 type Server struct {
@@ -56,6 +57,7 @@ type Server struct {
 	workspace   string // parent of every job directory; only paths under it are ever removed
 	cors        string
 	static      http.Handler
+	indexSlots  chan struct{}
 }
 
 func NewServer(workspace string) *Server {
@@ -65,11 +67,12 @@ func NewServer(workspace string) *Server {
 	}
 	web, _ := fs.Sub(webFiles, "web")
 	return &Server{
-		jobs:      map[string]*Job{},
-		snapshots: map[string]*Snapshot{},
-		workspace: workspace,
-		cors:      cors,
-		static:    http.FileServerFS(web),
+		jobs:       map[string]*Job{},
+		snapshots:  map[string]*Snapshot{},
+		workspace:  workspace,
+		cors:       cors,
+		static:     http.FileServerFS(web),
+		indexSlots: make(chan struct{}, maxIndexing),
 	}
 }
 
@@ -517,6 +520,13 @@ func (s *Server) localJobRoot(id string) (string, bool) {
 }
 
 func (s *Server) indexJob(id, root string) {
+	select {
+	case s.indexSlots <- struct{}{}:
+	default:
+		s.updateJob(id, "queued", 0, 0, "Waiting for other indexing to finish…")
+		s.indexSlots <- struct{}{}
+	}
+	defer func() { <-s.indexSlots }()
 	s.updateJob(id, "scanning", 0, 0, "Discovering source files…")
 	snapshot, err := indexDirectory(root, func(phase string, completed, total int, message string) {
 		s.updateJob(id, phase, completed, total, message)

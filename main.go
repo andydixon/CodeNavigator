@@ -38,9 +38,11 @@ type Job struct {
 	SnapshotID *string  `json:"snapshotId"`
 	Error      *string  `json:"error"`
 	Warnings   []string `json:"warnings"`
-	root       string
-	owner      string    // session that created the job
-	updated    time.Time // last progress, used to expire abandoned jobs
+	// AuthRequired is "signin" or "install" when GitHub access would fix a failed clone.
+	AuthRequired string `json:"authRequired,omitempty"`
+	root         string
+	owner        string    // session that created the job
+	updated      time.Time // last progress, used to expire abandoned jobs
 }
 
 const (
@@ -58,6 +60,9 @@ type Server struct {
 	cors        string
 	static      http.Handler
 	indexSlots  chan struct{}
+	github      githubApp
+	authMu      sync.Mutex
+	auth        map[string]*githubAuth // by session ID
 }
 
 func NewServer(workspace string) *Server {
@@ -73,6 +78,8 @@ func NewServer(workspace string) *Server {
 		cors:       cors,
 		static:     http.FileServerFS(web),
 		indexSlots: make(chan struct{}, maxIndexing),
+		github:     githubAppFromEnv(),
+		auth:       map[string]*githubAuth{},
 	}
 }
 
@@ -123,6 +130,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.createJob(w, r)
 	case strings.HasPrefix(path, "/api/jobs/"):
 		s.jobRoute(w, r, strings.Split(strings.TrimPrefix(path, "/api/jobs/"), "/"))
+	case strings.HasPrefix(path, "/api/github/"):
+		s.githubRoute(w, r, strings.TrimPrefix(path, "/api/github/"))
 	case strings.HasPrefix(path, "/api/snapshots/"):
 		s.snapshotRoute(w, r, strings.Split(strings.TrimPrefix(path, "/api/snapshots/"), "/"))
 	case !strings.HasPrefix(path, "/api/") && (r.Method == http.MethodGet || r.Method == http.MethodHead):
@@ -172,11 +181,17 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 	s.jobsMu.Unlock()
 
 	if request.Kind == "github" {
+		token := s.githubAuthFor(owner).token
 		go func() {
 			checkout := filepath.Join(root, "repo")
-			output, err := exec.Command("git", "clone", "--depth=1", "--single-branch", "--quiet", "--", url, checkout).CombinedOutput()
+			output, err := gitClone(url, checkout, token).CombinedOutput()
 			if err != nil {
-				s.failJob(id, fmt.Sprintf("git clone failed: %v %s", err, strings.TrimSpace(string(output))))
+				text := string(output)
+				if token != "" {
+					text = strings.ReplaceAll(text, token, "***")
+				}
+				message, authRequired := s.github.cloneFailure(text, token != "")
+				s.failJob(id, message, authRequired)
 				s.removeWorkspace(root)
 				return
 			}
@@ -533,7 +548,7 @@ func (s *Server) indexJob(id, root string) {
 	})
 	if err != nil {
 		s.removeWorkspace(root)
-		s.failJob(id, err.Error())
+		s.failJob(id, err.Error(), "")
 		return
 	}
 	s.jobsMu.Lock()
@@ -605,6 +620,13 @@ func (s *Server) expire(now time.Time) {
 		}
 	}
 	s.jobsMu.Unlock()
+	s.authMu.Lock()
+	for sid, auth := range s.auth {
+		if now.After(auth.expires) && now.After(auth.stateExpires) {
+			delete(s.auth, sid)
+		}
+	}
+	s.authMu.Unlock()
 	for _, root := range roots {
 		s.removeWorkspace(root)
 	}
@@ -619,11 +641,12 @@ func (s *Server) updateJob(id, phase string, completed, total int, message strin
 	}
 }
 
-func (s *Server) failJob(id, message string) {
+func (s *Server) failJob(id, message, authRequired string) {
 	s.jobsMu.Lock()
 	defer s.jobsMu.Unlock()
 	if job := s.jobs[id]; job != nil {
 		job.Phase, job.Message, job.Error = "error", "Indexing failed", &message
+		job.AuthRequired = authRequired
 		job.updated = time.Now()
 	}
 }

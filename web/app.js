@@ -709,7 +709,7 @@ async function uploadLocal(name,chosen){
 }
 
 $('#githubButton').addEventListener('click',startGithub);$('#githubInput').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();startGithub();}});
-async function startGithub(){const url=$('#githubInput').value.trim();$('#githubError').textContent='';if(!/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?(?:\.git)?$/.test(url)){ $('#githubError').textContent='Enter a public GitHub owner/repository URL.';return;}dialog.close();showProgress('Cloning repository','Connecting to GitHub…',0,0);try{const response=await apiFetch(apiUrl('/api/jobs'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'github',url,name:url.split('/').filter(Boolean).pop()?.replace(/\.git$/,'')})});const payload=await response.json();if(!response.ok)throw new Error(payload.error||'Could not start indexing');watchJob(payload.jobId);}catch(error){showError(error.message);}}
+async function startGithub(){const url=$('#githubInput').value.trim();$('#githubError').textContent='';if(!/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?(?:\.git)?$/.test(url)){ $('#githubError').textContent='Enter a GitHub owner/repository URL.';return;}lastGithubUrl=url;dialog.close();showProgress('Cloning repository','Connecting to GitHub…',0,0);try{const response=await apiFetch(apiUrl('/api/jobs'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'github',url,name:url.split('/').filter(Boolean).pop()?.replace(/\.git$/,'')})});const payload=await response.json();if(!response.ok)throw new Error(payload.error||'Could not start indexing');watchJob(payload.jobId);}catch(error){showError(error.message);}}
 
 let activeJobStream=null;
 async function watchJob(jobId){
@@ -720,7 +720,7 @@ async function watchJob(jobId){
     for await(const job of progressEvents(response)){
       if(controller.signal.aborted)return;
       showProgress(job.phase==='ready'?'Landscape ready':'Indexing codebase',job.message,job.completed,job.total);
-      if(job.error){showError(job.error);return;}
+      if(job.error){showError(job.error,job.authRequired);return;}
       if(job.snapshotId){
         const scene=await apiFetch(apiUrl(`/api/snapshots/${job.snapshotId}/scene`),{signal:controller.signal});
         if(!scene.ok)throw new Error('Could not load the landscape.');
@@ -732,8 +732,36 @@ async function watchJob(jobId){
   }catch(error){if(!controller.signal.aborted)showError(error.message);}
   finally{if(activeJobStream===controller)activeJobStream=null;controller.abort();}
 }
-function showProgress(title,message,completed,total){$('#progressCard').hidden=false;$('#progressTitle').textContent=title;$('#progressMessage').textContent=message||'';const percent=total?Math.max(3,Math.round(completed/total*100)):12;$('#progressFill').style.width=`${percent}%`;$('#progressFill').style.background='';$('#progressCount').textContent=total?`${format(completed)} / ${format(total)} · ${percent}%`:'Working…';}
-function showError(message){$('#progressCard').hidden=false;$('#progressTitle').textContent='Could not build landscape';$('#progressMessage').textContent=message;$('#progressFill').style.width='100%';$('#progressFill').style.background='var(--danger)';$('#progressCount').textContent='Check the repository or folder and try again.';}
+function showProgress(title,message,completed,total){$('#progressCard').hidden=false;$('#progressAction').hidden=true;$('#progressTitle').textContent=title;$('#progressMessage').textContent=message||'';const percent=total?Math.max(3,Math.round(completed/total*100)):12;$('#progressFill').style.width=`${percent}%`;$('#progressFill').style.background='';$('#progressCount').textContent=total?`${format(completed)} / ${format(total)} · ${percent}%`:'Working…';}
+function showError(message,authRequired){$('#progressCard').hidden=false;showAuthAction(authRequired);$('#progressTitle').textContent='Could not build landscape';$('#progressMessage').textContent=message;$('#progressFill').style.width='100%';$('#progressFill').style.background='var(--danger)';$('#progressCount').textContent='Check the repository or folder and try again.';}
+
+// Private repositories: sign in (or grant the GitHub App access), then resume the same repository on return.
+let lastGithubUrl='',githubStatus={};
+function showAuthAction(authRequired){
+  const action=$('#progressAction'),href=authRequired==='signin'?apiUrl('/api/github/login'):authRequired==='install'?githubStatus.installUrl:'';
+  action.hidden=!href;if(!href)return;
+  action.href=href;action.textContent=authRequired==='signin'?'Sign in with GitHub':'Grant repository access';
+}
+$('#progressAction').addEventListener('click',()=>{try{sessionStorage.setItem('codenav.pendingRepo',lastGithubUrl);}catch{}});
+$('#githubAccount').addEventListener('click',event=>{if(event.target.closest('a'))try{sessionStorage.setItem('codenav.pendingRepo',$('#githubInput').value.trim());}catch{}});
+async function loadGithubStatus(){
+  try{const response=await apiFetch(apiUrl('/api/github/status'));if(response.ok)githubStatus=await response.json();}catch{}
+  const account=$('#githubAccount');account.hidden=!githubStatus.configured;account.replaceChildren();if(account.hidden)return;
+  if(githubStatus.connected){
+    const signOut=Object.assign(document.createElement('button'),{type:'button',textContent:'Sign out'});
+    signOut.addEventListener('click',async()=>{await apiFetch(apiUrl('/api/github/logout'),{method:'POST'}).catch(()=>{});loadGithubStatus();});
+    account.append(`Signed in to GitHub as ${githubStatus.login} · `,signOut);
+    if(githubStatus.installUrl)account.append(' · ',Object.assign(document.createElement('a'),{href:githubStatus.installUrl,textContent:'Choose repositories'}));
+  }else account.append('Private repository? ',Object.assign(document.createElement('a'),{href:apiUrl('/api/github/login'),textContent:'Sign in with GitHub'}));
+}
+async function resumeAfterGithub(){
+  const params=new URLSearchParams(location.search),outcome=params.get('github')||(params.get('setup_action')?'installed':'');
+  if(!outcome)return;
+  window.history.replaceState(null,'',location.pathname);
+  let pending='';try{pending=sessionStorage.getItem('codenav.pendingRepo')||'';sessionStorage.removeItem('codenav.pendingRepo');}catch{}
+  if(outcome==='denied'||outcome==='error'){showError(outcome==='denied'?'GitHub sign-in was cancelled.':'GitHub sign-in failed. Please try again.');return;}
+  if(pending){$('#githubInput').value=pending;startGithub();}
+}
 
 async function checkBackend(){
   const indicator=$('.live-dot');
@@ -773,4 +801,4 @@ switchTab('inspector');
 new ResizeObserver(()=>{dirty=true;}).observe(viewport);
 $('#settingsButton').title='Workspace settings';$('#settingsButton').setAttribute('aria-label','Workspace settings');
 $('#settingsButton svg').innerHTML='<circle cx="12" cy="12" r="3"/><path d="m9.5 3-.5 2-2 1-2-.5L3 9l1.5 1.5v3L3 15l2 3.5 2-.5 2 1 .5 2h5l.5-2 2-1 2 .5 2-3.5-1.5-1.5v-3L21 9l-2-3.5-2 .5-2-1-.5-2z"/>';
-renderer.setData([]);fitScene();renderInspector();renderHistory();requestAnimationFrame(animate);checkBackend();
+renderer.setData([]);fitScene();renderInspector();renderHistory();requestAnimationFrame(animate);checkBackend();loadGithubStatus().then(resumeAfterGithub);

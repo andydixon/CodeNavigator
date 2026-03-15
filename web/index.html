@@ -60,6 +60,7 @@
           </div>
           <div class="progress-track"><i id="progressFill"></i></div>
           <span class="progress-count" id="progressCount"></span>
+          <a class="dialog-button progress-action" id="progressAction" hidden></a>
         </div>
         <div class="tooltip" id="tooltip" hidden></div>
         <div class="camera-help" id="cameraHelp" hidden>
@@ -115,11 +116,12 @@
       </button>
       <div class="source-card github-card">
         <span class="source-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="7" cy="5" r="2"/><circle cx="7" cy="19" r="2"/><circle cx="17" cy="5" r="2"/><path d="M7 7v10m10-10v3a4 4 0 0 1-4 4H7"/></svg></span>
-        <label for="githubInput"><strong>Public GitHub repository</strong><small>Explore a repository from its URL</small></label>
+        <label for="githubInput"><strong>GitHub repository</strong><small>Public, or private once you sign in with GitHub</small></label>
         <div class="github-row"><input id="githubInput" type="url" autocomplete="off" spellcheck="false" aria-describedby="githubError" placeholder="https://github.com/owner/repo"><button type="button" id="githubButton">Explore →</button></div>
         <p class="form-error" id="githubError" role="alert"></p>
+        <p class="github-account" id="githubAccount" hidden></p>
       </div>
-      <p class="dialog-foot">Files are held temporarily by this server and cleared when it restarts. Do not upload private code to a public deployment you do not control.</p>
+      <p class="dialog-foot">Code is held temporarily by this server, visible only to this browser, and cleared after an hour of inactivity.</p>
     </form>
   </dialog>
 

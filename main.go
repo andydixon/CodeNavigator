@@ -51,6 +51,8 @@ const (
 	maxIndexing  = 2         // concurrent index runs; each already uses every CPU
 )
 
+var sseKeepAlive = 15 * time.Second // variable so tests can shorten it
+
 type Server struct {
 	jobsMu      sync.Mutex
 	jobs        map[string]*Job
@@ -488,20 +490,28 @@ func (s *Server) streamJobEvents(w http.ResponseWriter, r *http.Request, id stri
 	last := ""
 	ticker := time.NewTicker(150 * time.Millisecond)
 	defer ticker.Stop()
-	for range 1200 {
+	lastWrite := time.Now()
+	// Runs until the job finishes, disappears, or the client leaves; queued jobs can wait a while.
+	for {
 		job, ok := s.jobSnapshot(id)
 		if !ok {
 			return
 		}
 		encoded := marshal(job)
+		chunk := ""
 		if string(encoded) != last {
-			if _, err := fmt.Fprintf(w, "event: progress\ndata: %s\n\n", encoded); err != nil {
+			chunk, last = fmt.Sprintf("event: progress\ndata: %s\n\n", encoded), string(encoded)
+		} else if time.Since(lastWrite) >= sseKeepAlive {
+			chunk = ": keep-alive\n\n" // stops proxies timing out an idle stream
+		}
+		if chunk != "" {
+			if _, err := io.WriteString(w, chunk); err != nil {
 				return
 			}
 			if flusher != nil {
 				flusher.Flush()
 			}
-			last = string(encoded)
+			lastWrite = time.Now()
 		}
 		if job.SnapshotID != nil || job.Error != nil {
 			return

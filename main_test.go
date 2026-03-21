@@ -390,3 +390,47 @@ func TestIndexingQueuesBeyondConcurrencyLimit(t *testing.T) {
 	}
 	t.Fatalf("job never finished after a slot was freed: %+v", job)
 }
+
+func TestProgressStreamSendsKeepAlivesWhileQueued(t *testing.T) {
+	defer func(old time.Duration) { sseKeepAlive = old }(sseKeepAlive)
+	sseKeepAlive = 300 * time.Millisecond
+	server, c := newTestServer(t)
+	for range maxIndexing {
+		server.indexSlots <- struct{}{}
+	}
+	var created struct{ JobID string }
+	c.json("POST", "/api/jobs", `{"kind":"local"}`, 201, &created)
+	c.json("POST", "/api/jobs/"+created.JobID+"/files?path=a.go", "package a", 200, nil)
+	c.json("POST", "/api/jobs/"+created.JobID+"/commit", "", 202, nil)
+
+	res, err := c.http.Get(c.url + "/api/jobs/" + created.JobID + "/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	lines := bufio.NewScanner(res.Body)
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("no keep-alive before the deadline")
+		default:
+		}
+		if !lines.Scan() {
+			t.Fatal("stream closed while job was queued")
+		}
+		if lines.Text() == ": keep-alive" {
+			break
+		}
+	}
+	<-server.indexSlots
+	var job Job
+	for lines.Scan() {
+		if data, ok := strings.CutPrefix(lines.Text(), "data: "); ok {
+			json.Unmarshal([]byte(data), &job)
+		}
+	}
+	if job.SnapshotID == nil {
+		t.Fatalf("stream ended without a snapshot: %+v", job)
+	}
+}

@@ -135,7 +135,7 @@ func TestGitCloneKeepsTokenOutOfArgsAndIgnoresHostCredentials(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
-	cmd := gitClone("https://github.com/o/r", t.TempDir(), "ghu_secret")
+	cmd := gitClone(t.Context(), "https://github.com/o/r", t.TempDir(), "ghu_secret")
 	if strings.Contains(strings.Join(cmd.Args, " "), "ghu_secret") {
 		t.Fatal("token appears in git arguments")
 	}

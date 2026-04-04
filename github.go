@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -178,8 +179,8 @@ func (s *Server) githubAuthFor(sid string) githubAuth {
 
 // gitClone builds the clone command. The token travels in environment-provided git config,
 // never in the URL or arguments, so it cannot leak through process lists or error output.
-func gitClone(repoURL, dest, token string) *exec.Cmd {
-	cmd := exec.Command("git", "clone", "--depth=1", "--single-branch", "--quiet", "--", repoURL, dest)
+func gitClone(ctx context.Context, repoURL, dest, token string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "git", "clone", "--depth=1", "--single-branch", "--quiet", "--", repoURL, dest)
 	// Ignore the host's git config and credential helpers: only the visitor's own token may
 	// ever authenticate a clone.
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null",

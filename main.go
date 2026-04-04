@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"embed"
 	"encoding/json"
@@ -49,6 +50,7 @@ const (
 	idleExpiry   = time.Hour // snapshots unused and jobs untouched for this long are dropped
 	maxSnapshots = 8         // ponytail: fixed caps sized for the 2GB container; make them configurable if memory changes
 	maxIndexing  = 2         // concurrent index runs; each already uses every CPU
+	cloneTimeout = 10 * time.Minute
 )
 
 var sseKeepAlive = 15 * time.Second // variable so tests can shorten it
@@ -186,9 +188,14 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 		token := s.githubAuthFor(owner).token
 		go func() {
 			checkout := filepath.Join(root, "repo")
-			output, err := gitClone(url, checkout, token).CombinedOutput()
+			ctx, cancel := context.WithTimeout(context.Background(), cloneTimeout)
+			output, err := gitClone(ctx, url, checkout, token).CombinedOutput()
+			cancel()
 			if err != nil {
 				text := string(output)
+				if ctx.Err() != nil {
+					text = "timed out after " + cloneTimeout.String()
+				}
 				if token != "" {
 					text = strings.ReplaceAll(text, token, "***")
 				}

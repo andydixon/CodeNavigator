@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -171,5 +172,31 @@ func TestCloneFailureMessages(t *testing.T) {
 		if got != c.want || message == "" {
 			t.Errorf("cloneFailure(%q, %v) = %q, %q; want %q", c.output, c.signedIn, message, got, c.want)
 		}
+	}
+}
+
+func TestCloneRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	source := t.TempDir()
+	for _, args := range [][]string{{"init", "-q"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"}} {
+		if out, err := exec.Command("git", append([]string{"-C", source}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	if out, err := cloneRepo(source, filepath.Join(t.TempDir(), "ok"), ""); err != nil {
+		t.Fatalf("local clone failed: %v %s", err, out)
+	}
+
+	out, err := cloneRepo(filepath.Join(source, "missing-ghu_secret"), filepath.Join(t.TempDir(), "x"), "ghu_secret")
+	if err == nil || strings.Contains(out, "timed out") || strings.Contains(out, "ghu_secret") || !strings.Contains(out, "***") {
+		t.Fatalf("failed clone = %v %q; want a masked, non-timeout error", err, out)
+	}
+
+	defer func(old time.Duration) { cloneTimeout = old }(cloneTimeout)
+	cloneTimeout = time.Nanosecond
+	if out, err := cloneRepo(source, filepath.Join(t.TempDir(), "slow"), ""); err == nil || !strings.HasPrefix(out, "timed out") {
+		t.Fatalf("expired clone = %v %q; want timeout", err, out)
 	}
 }

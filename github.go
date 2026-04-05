@@ -195,6 +195,21 @@ func gitClone(ctx context.Context, repoURL, dest, token string) *exec.Cmd {
 	return cmd
 }
 
+// cloneRepo clones with a timeout and returns git's output with the token masked.
+func cloneRepo(repoURL, dest, token string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), cloneTimeout)
+	defer cancel()
+	output, err := gitClone(ctx, repoURL, dest, token).CombinedOutput()
+	text := string(output)
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		text = "timed out after " + cloneTimeout.String()
+	}
+	if token != "" {
+		text = strings.ReplaceAll(text, token, "***")
+	}
+	return text, err
+}
+
 // cloneFailure turns git output into a user-facing message and whether signing in (or
 // granting the app access) could fix it.
 func (g githubApp) cloneFailure(output string, signedIn bool) (message string, authRequired string) {

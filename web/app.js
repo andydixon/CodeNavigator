@@ -605,7 +605,8 @@ function pickAt(x,y){
 }
 
 viewport.addEventListener('pointerdown',event=>{
-  if(event.button>2)return;
+  // Only drags that start on the map; pointer capture would otherwise swallow clicks on floating controls.
+  if(event.button>2||event.target!==glCanvas)return;
   const pan=renderer.mode==='3d'&&(event.button===1||event.button===2||event.shiftKey||event.altKey||event.metaKey||event.ctrlKey);
   if(renderer.mode==='2d'&&event.button!==0)return;
   event.preventDefault();

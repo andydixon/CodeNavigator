@@ -62,8 +62,16 @@ void main(){
   vec2 face = vFace < .5 || vFace > 4.5 ? vUnit.xy : vFace < 2.5 ? vUnit.xz : vUnit.yz;
   float edge = min(min(face.x, 1.0-face.x), min(face.y, 1.0-face.y));
   float border = smoothstep(0.0, fwidth(edge)*1.35 + .009, edge);
-  vec3 base = vec3(.11);
-  vec3 stroke = mix(vColor.rgb, vec3(1.0), .07);
+  // Tile tops match TILE_TOP in app.js so source drawn over a roof blends in; 2D gets a faint layer tint.
+  vec3 top = vec3(.055, .067, .094);
+  vec3 base = uMode < .5 ? mix(top, vColor.rgb, .07) : top;
+  vec3 stroke = mix(vColor.rgb, vec3(1.0), .12);
+  if(vFace > .5 && vFace < 4.5){
+    // Walls: a fixed key light per side and a darker foot make buildings read as solids.
+    float light = vFace < 1.5 ? .34 : vFace < 2.5 ? .2 : vFace < 3.5 ? .26 : .42;
+    base = mix(top, vColor.rgb, light) * (.55 + .45 * vUnit.z);
+    stroke = mix(stroke, base, .45);
+  }
   outColor = vec4(mix(stroke, base, border), uAlpha);
 }`;
 
@@ -114,7 +122,7 @@ export class LandscapeRenderer {
 
   render(alpha=1) {
     const gl=this.gl; this.resize();
-    gl.clearColor(.11,.11,.11,1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+    gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
     gl.useProgram(this.program); gl.bindVertexArray(this.vao);
     const u=n=>gl.getUniformLocation(this.program,n);

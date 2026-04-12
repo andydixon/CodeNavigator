@@ -12,6 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"os/exec"
@@ -69,6 +70,11 @@ type Server struct {
 	github      githubApp
 	authMu      sync.Mutex
 	auth        map[string]*githubAuth // by session ID
+}
+
+func init() {
+	// Alpine has no /etc/mime.types, so the embedded font needs an explicit type.
+	mime.AddExtensionType(".woff2", "font/woff2")
 }
 
 func NewServer(workspace string) *Server {

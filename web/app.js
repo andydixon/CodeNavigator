@@ -170,7 +170,7 @@ function applySnapshot(snapshot){
   fileById=new Map(files.map(file=>[file.id,file]));referenceDegree=new Map();edgesByFile=new Map();let known=0,inferred=0;for(const edge of edges){referenceDegree.set(edge.from,(referenceDegree.get(edge.from)||0)+1);referenceDegree.set(edge.to,(referenceDegree.get(edge.to)||0)+1);for(const id of [edge.from,edge.to]){const list=edgesByFile.get(id);if(list)list.push(edge);else edgesByFile.set(id,[edge]);}if(edge.confidence==='known')known++;else inferred++;}
   const layers=new Map();for(const file of files){const layer=file.layer in layerLabels?file.layer:'unknown';layers.set(layer,(layers.get(layer)||0)+1);}sceneStats={definitions:snapshot.definitions??files.reduce((n,file)=>n+(file.symbolCount||0),0),totalLines:snapshot.totalLines??files.reduce((n,file)=>n+file.lines,0),known,inferred,layers};
   computeLayout();fitScene();updateStats(snapshot);renderInspector();renderResults([]);renderHistory();
-  $('#breadcrumbText').textContent=currentName;$('#emptyState').hidden=files.length>0;
+  $('#breadcrumbText').textContent=currentName;$('#emptyState').hidden=files.length>0;$('#welcome').hidden=true;
 }
 
 function fitScene(){
@@ -203,7 +203,9 @@ function updateStats(snapshot={}){
 function format(value){return Number(value||0).toLocaleString();}
 function escapeHtml(value=''){return String(value).replace(/[&<>"]/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[char]));}
 
-const syntaxPalette={plain:'#aab5af',comment:'#64726b',string:'#89b88f',number:'#83a8d8',keyword:'#d8a75b',type:'#79b8d8',function:'#d6cf8b',property:'#b397d5',operator:'#8d9c95',constant:'#d98585',tag:'#65b9aa'};
+const syntaxPalette={plain:'#b6bfd0',comment:'#5c667a',string:'#8fd694',number:'#f5a97f',keyword:'#c69cff',type:'#6ec6ff',function:'#7aa7ff',property:'#5fd3c6',operator:'#8f9ab0',constant:'#ff8fa3',tag:'#5fd3c6'};
+// Matches the renderer's tile top so code drawn over a 3D roof blends with the WebGL face.
+const TILE_TOP='#0e1118';
 const syntaxKeywords=new Set(`abstract as async await break case catch class const continue crate def default defer delete do else enum export extends extern false final finally fn for from func function get go if impl import in instanceof interface is lambda let loop match mod module mut namespace new nil None null of override package private protected pub public raise readonly require return self set static struct super switch this throw trait true try type typeof undefined union unsafe use using var virtual void where while with yield`.split(' '));
 const syntaxConstants=new Set('true false null nil none undefined nan infinity self this super'.split(' '));
 const tokenPattern=/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b0x[\da-f]+\b|\b0b[01]+\b|#[\da-f]{3,8}\b|\b\d+(?:\.\d+)?(?:e[+-]?\d+)?\b|[A-Za-z_$][\w$-]*|\s+|./gi;
@@ -317,7 +319,7 @@ function selectFile(file,addHistory=true){
 
 function renderInspector(){
   const hint=$('#inspectHint'),content=$('#inspectContent');
-  if(!files.length){hint.hidden=false;hint.textContent='Open a local folder or public GitHub repository to begin.';content.innerHTML='';return;}
+  if(!files.length){hint.hidden=false;hint.textContent='Open a local folder or GitHub repository to begin.';content.innerHTML='';return;}
   if(!selected){
     hint.hidden=false;hint.textContent=expandedCoverageLayer?'Click a file or use ↑ and ↓ to move around the map':'Select an entity on the map';
     const coverageRows=Object.entries(layerLabels).map(([key,label])=>`<button class="coverage-row${expandedCoverageLayer===key?' active':''}" type="button" data-coverage-layer="${key}" aria-expanded="${expandedCoverageLayer===key}"><i style="background:${palettes[paletteIndex][key]}"></i><span>${label}</span><small>${format(sceneStats.layers.get(key)||0)}</small><b aria-hidden="true">${expandedCoverageLayer===key?'−':'+'}</b></button>`).join('');
@@ -406,7 +408,7 @@ $$('.tab').forEach(tab=>tab.addEventListener('click',()=>switchTab(tab.dataset.t
 function resizeOverlay(){const dpr=Math.min(devicePixelRatio||1,2),w=Math.floor(overlay.clientWidth*dpr),h=Math.floor(overlay.clientHeight*dpr);if(overlay.width!==w||overlay.height!==h){overlay.width=w;overlay.height=h;}overlayCtx.setTransform(dpr,0,0,dpr,0,0);}
 function drawChip(ctx,text,x,y,maxWidth,accent,occupied,force=false,align='left'){
   if(maxWidth<24)return false;
-  ctx.font='600 11px -apple-system, BlinkMacSystemFont, sans-serif';
+  ctx.font='600 11px Inter, system-ui, sans-serif';
   let label=text;
   if(ctx.measureText(label).width>maxWidth-10){let low=1,high=label.length;while(low<high){const mid=Math.ceil((low+high)/2);if(ctx.measureText(`${label.slice(0,mid)}…`).width<=maxWidth-10)low=mid;else high=mid-1;}label=`${label.slice(0,low)}…`;}
   const width=Math.min(maxWidth,ctx.measureText(label).width+10);
@@ -414,7 +416,7 @@ function drawChip(ctx,text,x,y,maxWidth,accent,occupied,force=false,align='left'
   const box={x:x-3,y:y-2,w:width+6,h:21};
   if(!force&&occupied?.some(other=>box.x<other.x+other.w&&box.x+box.w>other.x&&box.y<other.y+other.h&&box.y+box.h>other.y))return false;
   occupied?.push(box);
-  ctx.fillStyle='rgba(27,30,28,.9)';ctx.fillRect(x,y,width,17);
+  ctx.fillStyle='rgba(10,12,18,.88)';ctx.fillRect(x,y,width,17);
   if(accent){ctx.fillStyle=accent;ctx.fillRect(x,y,2,17);}
   ctx.fillStyle='rgba(237,241,238,.94)';ctx.fillText(label,x+5,y+2);
   return true;
@@ -426,7 +428,7 @@ function drawFileChip(ctx,item,rect,accent,occupied,force=false){
   return drawChip(ctx,item.name,anchor.x,anchor.y-8,maxWidth,accent,occupied,force,'center');
 }
 function drawOverlay(){
-  resizeOverlay();const ctx=overlayCtx,w=overlay.clientWidth,h=overlay.clientHeight;ctx.clearRect(0,0,w,h);ctx.save();ctx.font='600 11px -apple-system, BlinkMacSystemFont, sans-serif';ctx.textBaseline='top';
+  resizeOverlay();const ctx=overlayCtx,w=overlay.clientWidth,h=overlay.clientHeight;ctx.clearRect(0,0,w,h);ctx.save();ctx.font='600 11px Inter, system-ui, sans-serif';ctx.textBaseline='top';
   codeTexturesPending=false;
   codeTextureDeadline=performance.now()+5;
   const hitIds=new Set(searchHits.map(hit=>hit.entityId??hit.id)),occupied=[],visible=visibleLayout(w,h);visibleScreenItems=visible;
@@ -454,7 +456,7 @@ function drawOverlay(){
     if(rect.w>46&&rect.h>18&&codeScreenFont(item)<5.2&&labelCount<110&&drawFileChip(ctx,item,rect,null,occupied))labelCount++;
   }
   if(hitIds.size){
-    ctx.fillStyle='rgba(11,13,12,.48)';ctx.fillRect(0,0,w,h);
+    ctx.fillStyle='rgba(5,6,10,.55)';ctx.fillRect(0,0,w,h);
     for(const {item,rect} of visible){if(!hitIds.has(item.id))continue;ctx.strokeStyle='#e8c74b';ctx.lineWidth=2;ctx.strokeRect(rect.x-.5,rect.y-.5,rect.w+1,rect.h+1);drawFileChip(ctx,item,rect,'#e8c74b',null,true);}
   }
   drawSelectedConnections(ctx);
@@ -465,7 +467,7 @@ function drawOverlay(){
 function tileCorners(item){return [[item.x,item.y],[item.x+item.w,item.y],[item.x+item.w,item.y+item.h],[item.x,item.y+item.h]].map(([x,y])=>renderer.project([x,y,item.height||0]));}
 function drawGroundGrid(ctx){
   if(!layoutItems.length)return;
-  ctx.save();ctx.globalCompositeOperation='destination-over';ctx.strokeStyle='rgba(180,180,180,.12)';ctx.lineWidth=.75;ctx.beginPath();
+  ctx.save();ctx.globalCompositeOperation='destination-over';ctx.strokeStyle='rgba(150,160,255,.11)';ctx.lineWidth=.75;ctx.beginPath();
   for(let x=-200;x<=1200;x+=100){const a=renderer.project([x,-200,0]),b=renderer.project([x,900,0]);ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);}
   for(let y=-200;y<=900;y+=100){const a=renderer.project([-200,y,0]),b=renderer.project([1200,y,0]);ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);}
   ctx.stroke();
@@ -556,7 +558,7 @@ function draw3dCode(ctx,visible){
   for(const {item,rect} of faces){
     const corners=tileCorners(item);if(corners.some(p=>!Number.isFinite(p.x)||!Number.isFinite(p.y)))continue;
     ctx.save();ctx.beginPath();corners.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.clip();
-    ctx.fillStyle='#1c1c1c';ctx.fillRect(rect.x-1,rect.y-1,rect.w+2,rect.h+2);
+    ctx.fillStyle=TILE_TOP;ctx.fillRect(rect.x-1,rect.y-1,rect.w+2,rect.h+2);
     const texture=buildCodeTexture(item,rect);
     if(texture){
       // Match the two triangles used by the WebGL top face exactly.
@@ -692,7 +694,7 @@ document.addEventListener('keydown',event=>{
 });
 window.addEventListener('resize',()=>{dirty=true;});
 
-const dialog=$('#loadDialog');$('#loadButton').addEventListener('click',()=>dialog.showModal());
+const dialog=$('#loadDialog');$('#loadButton').addEventListener('click',()=>dialog.showModal());$('#welcomeOpen').addEventListener('click',()=>dialog.showModal());
 $('#localFolderButton').addEventListener('click',async()=>{
   dialog.close();
   if('showDirectoryPicker' in window){try{const handle=await window.showDirectoryPicker();const chosen=[];await collectHandles(handle,'',chosen);await uploadLocal(handle.name,chosen);}catch(error){if(error.name!=='AbortError')showError(error.message);}}

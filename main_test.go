@@ -240,7 +240,7 @@ func TestRoutesAndHeaders(t *testing.T) {
 		t.Fatalf("preflight = %d %v", res.StatusCode, res.Header)
 	}
 
-	for path, contentType := range map[string]string{"/": "text/html", "/api.mjs": "text/javascript", "/styles.css": "text/css", "/config.js": "text/javascript"} {
+	for path, contentType := range map[string]string{"/": "text/html", "/api.mjs": "text/javascript", "/styles.css": "text/css", "/config.js": "text/javascript", "/inter-latin.woff2": "font/woff2"} {
 		res, err := http.Get(c.url + path)
 		if err != nil {
 			t.Fatal(err)

@@ -115,7 +115,10 @@ export class LandscapeRenderer {
   }
 
   resize() {
-    const dpr=Math.min(devicePixelRatio||1,2), w=Math.max(1,Math.floor(this.canvas.clientWidth*dpr)), h=Math.max(1,Math.floor(this.canvas.clientHeight*dpr));
+    // Cache the CSS size once per frame: project() runs tens of thousands of times per frame,
+    // and reading clientWidth there forces layout queries that dominated 3D frame time.
+    this.width=Math.max(1,this.canvas.clientWidth); this.height=Math.max(1,this.canvas.clientHeight);
+    const dpr=Math.min(devicePixelRatio||1,2), w=Math.max(1,Math.floor(this.width*dpr)), h=Math.max(1,Math.floor(this.height*dpr));
     if(this.canvas.width!==w||this.canvas.height!==h){this.canvas.width=w;this.canvas.height=h;}
     this.dpr=dpr; this.gl.viewport(0,0,w,h);
   }
@@ -125,33 +128,43 @@ export class LandscapeRenderer {
     gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
     gl.useProgram(this.program); gl.bindVertexArray(this.vao);
-    const u=n=>gl.getUniformLocation(this.program,n);
-    gl.uniform2f(u('uCenter'),this.camera.x,this.camera.y);
-    gl.uniform2f(u('uViewport'),this.canvas.width/this.dpr,this.canvas.height/this.dpr);
-    gl.uniform1f(u('uZoom'),this.camera.zoom);
-    gl.uniform1f(u('uMode'),this.mode==='3d'?1:0);
-    gl.uniform2f(u('uOrbit'),this.camera.yaw,this.camera.pitch);
-    gl.uniform1f(u('uDistance'),this.camera.distance);
-    gl.uniform1f(u('uAlpha'),alpha);
+    this.uniforms||=Object.fromEntries(['uCenter','uViewport','uZoom','uMode','uOrbit','uDistance','uAlpha'].map(n=>[n,gl.getUniformLocation(this.program,n)]));
+    const u=this.uniforms;
+    gl.uniform2f(u.uCenter,this.camera.x,this.camera.y);
+    gl.uniform2f(u.uViewport,this.width,this.height);
+    gl.uniform1f(u.uZoom,this.camera.zoom);
+    gl.uniform1f(u.uMode,this.mode==='3d'?1:0);
+    gl.uniform2f(u.uOrbit,this.camera.yaw,this.camera.pitch);
+    gl.uniform1f(u.uDistance,this.camera.distance);
+    gl.uniform1f(u.uAlpha,alpha);
     gl.drawArraysInstanced(gl.TRIANGLES,0,36,this.count);
   }
 
+  // Per-frame trigonometry for project(); camera values only change between frames.
+  basis() {
+    const c=this.camera,b=this._basis||(this._basis={});
+    if(b.yaw!==c.yaw||b.pitch!==c.pitch){b.yaw=c.yaw;b.pitch=c.pitch;b.cy=Math.cos(c.yaw);b.sy=Math.sin(c.yaw);b.cp=Math.cos(c.pitch);b.sp=Math.sin(c.pitch);}
+    return b;
+  }
+
   screenRect(item) {
-    if(this.mode==='2d') return { x:(item.x-this.camera.x)*this.camera.zoom+this.canvas.clientWidth/2, y:(item.y-this.camera.y)*this.camera.zoom+this.canvas.clientHeight/2, w:item.w*this.camera.zoom, h:item.h*this.camera.zoom };
-    const corners=[[item.x,item.y,item.height],[item.x+item.w,item.y,item.height],[item.x,item.y+item.h,item.height],[item.x+item.w,item.y+item.h,item.height]].map(p=>this.project(p));
-    const xs=corners.map(p=>p.x), ys=corners.map(p=>p.y);
-    return {x:Math.min(...xs),y:Math.min(...ys),w:Math.max(...xs)-Math.min(...xs),h:Math.max(...ys)-Math.min(...ys)};
+    if(this.mode==='2d') return { x:(item.x-this.camera.x)*this.camera.zoom+this.width/2, y:(item.y-this.camera.y)*this.camera.zoom+this.height/2, w:item.w*this.camera.zoom, h:item.h*this.camera.zoom };
+    let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+    for(const [x,y] of [[item.x,item.y],[item.x+item.w,item.y],[item.x,item.y+item.h],[item.x+item.w,item.y+item.h]]){
+      const p=this.project([x,y,item.height]);
+      if(p.x<x0)x0=p.x; if(p.x>x1)x1=p.x; if(p.y<y0)y0=p.y; if(p.y>y1)y1=p.y;
+    }
+    return {x:x0,y:y0,w:x1-x0,h:y1-y0};
   }
 
   project([x,y,z=0]) {
-    let px=(x-this.camera.x)/420, py=(y-this.camera.y)/420, pz=z/170;
-    const cy=Math.cos(this.camera.yaw),sy=Math.sin(this.camera.yaw),cp=Math.cos(this.camera.pitch),sp=Math.sin(this.camera.pitch);
-    [px,py]=[cy*px-sy*py,sy*px+cy*py]; [py,pz]=[cp*py+sp*pz,-sp*py+cp*pz];
-    const depth=Math.max(.5,this.camera.distance-py), aspect=this.canvas.clientWidth/this.canvas.clientHeight;
-    return {x:this.canvas.clientWidth/2+(px/(depth*aspect)*2.7)*this.canvas.clientWidth/2,y:this.canvas.clientHeight/2-((pz-.35)/depth*2.7)*this.canvas.clientHeight/2,depth};
+    const {cy,sy,cp,sp}=this.basis(),dx=(x-this.camera.x)/420,dy=(y-this.camera.y)/420,dz=z/170;
+    const rx=cy*dx-sy*dy,ry=sy*dx+cy*dy,py=cp*ry+sp*dz,pz=-sp*ry+cp*dz;
+    const depth=Math.max(.5,this.camera.distance-py),w=this.width,h=this.height;
+    return {x:w/2+(rx/(depth*w/h)*2.7)*w/2,y:h/2-((pz-.35)/depth*2.7)*h/2,depth};
   }
 
   worldAt(clientX,clientY) {
-    return {x:this.camera.x+(clientX-this.canvas.clientWidth/2)/this.camera.zoom,y:this.camera.y+(clientY-this.canvas.clientHeight/2)/this.camera.zoom};
+    return {x:this.camera.x+(clientX-this.width/2)/this.camera.zoom,y:this.camera.y+(clientY-this.height/2)/this.camera.zoom};
   }
 }

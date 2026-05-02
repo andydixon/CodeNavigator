@@ -35,7 +35,7 @@ let edgesByFile=new Map();
 let sceneStats={definitions:0,totalLines:0,known:0,inferred:0,layers:new Map()};
 let spatialGrid=new Map();
 let visibleScreenItems=[];
-let overviewCanvas=null,overviewContext=null,overviewIndex=0;
+let overviewCanvas=null,overviewContext=null,overviewIndex=0,overviewUploaded=-1,overviewUploadedAt=0;
 let codeTextureBytes=0;
 const codeTextureLru=new Map(),codeTextureBudget=192*1024*1024,overviewScale=3;
 let selected=null;
@@ -141,7 +141,7 @@ function computeLayout(){
 }
 
 function resetCodeCaches(){
-  overviewCanvas=document.createElement('canvas');overviewCanvas.width=1000*overviewScale;overviewCanvas.height=680*overviewScale;overviewContext=overviewCanvas.getContext('2d',{alpha:true});overviewIndex=0;codeTextureBytes=0;codeTextureLru.clear();
+  overviewUploaded=-1;overviewCanvas=document.createElement('canvas');overviewCanvas.width=1000*overviewScale;overviewCanvas.height=680*overviewScale;overviewContext=overviewCanvas.getContext('2d',{alpha:true});overviewIndex=0;codeTextureBytes=0;codeTextureLru.clear();
 }
 
 const spatialCell=50;
@@ -432,13 +432,12 @@ function drawOverlay(){
   codeTexturesPending=false;
   codeTextureDeadline=performance.now()+5;
   const hitIds=new Set(searchHits.map(hit=>hit.entityId??hit.id)),occupied=[],visible=visibleLayout(w,h);visibleScreenItems=visible;
-  if(renderer.mode==='3d')drawGroundGrid(ctx);
   let labelCount=0;
   if(showCode&&renderer.mode==='2d'){
     if(renderer.camera.zoom<=2.75)drawCodeOverview(ctx);
     else for(const {item,rect} of visible)drawCodeTexture(ctx,item,rect);
   }
-  if(showCode&&renderer.mode==='3d')draw3dCode(ctx,visible);
+  if(showCode&&renderer.mode==='3d'){fillCodeOverview();uploadCodeOverview();draw3dCode(ctx,visible);}
   if(renderer.mode==='2d'){
     const labelDepth=renderer.camera.zoom<1.15?1:renderer.camera.zoom<1.8?2:renderer.camera.zoom<3?3:4;
     for(const dir of directoryRects){
@@ -465,18 +464,6 @@ function drawOverlay(){
 }
 
 function tileCorners(item){return [[item.x,item.y],[item.x+item.w,item.y],[item.x+item.w,item.y+item.h],[item.x,item.y+item.h]].map(([x,y])=>renderer.project([x,y,item.height||0]));}
-function drawGroundGrid(ctx){
-  if(!layoutItems.length)return;
-  ctx.save();ctx.globalCompositeOperation='destination-over';ctx.strokeStyle='rgba(150,160,255,.11)';ctx.lineWidth=.75;ctx.beginPath();
-  for(let x=-200;x<=1200;x+=100){const a=renderer.project([x,-200,0]),b=renderer.project([x,900,0]);ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);}
-  for(let y=-200;y<=900;y+=100){const a=renderer.project([-200,y,0]),b=renderer.project([1200,y,0]);ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);}
-  ctx.stroke();
-  // Mask the grid underneath opaque tile tops so it never crosses source surfaces.
-  ctx.globalCompositeOperation='destination-out';ctx.fillStyle='#000';
-  for(const {item} of visibleScreenItems){ctx.beginPath();tileCorners(item).forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.fill();}
-  ctx.restore();
-}
-
 function drawSelectedConnections(ctx){
   if(!selected)return;
   const origin=layoutById.get(selected.id);if(!origin)return;
@@ -521,13 +508,25 @@ function paintCodeSurface(ctx,item,width,height){
     drawSyntaxLine(ctx,source[index]||'',item,pad,pad+index*lineHeight,width-pad,.92,tokens);
   }
 }
-function drawCodeOverview(ctx){
+// Paints files into the overview canvas within the frame budget. The same canvas is the 2D
+// zoomed-out code layer and, uploaded to the GPU, the texture on every 3D roof.
+function fillCodeOverview(){
   if(!overviewCanvas)resetCodeCaches();
   while(overviewIndex<layoutItems.length&&performance.now()<codeTextureDeadline){
     const item=layoutItems[overviewIndex++],x=Math.round(item.x*overviewScale),y=Math.round(item.y*overviewScale),width=Math.max(1,Math.round(item.w*overviewScale)),height=Math.max(1,Math.round(item.h*overviewScale));
     overviewContext.save();overviewContext.translate(x,y);overviewContext.beginPath();overviewContext.rect(0,0,width,height);overviewContext.clip();paintCodeSurface(overviewContext,item,width,height);overviewContext.restore();
   }
   if(overviewIndex<layoutItems.length)codeTexturesPending=true;
+}
+function uploadCodeOverview(){
+  // Re-uploading 3000x2040 pixels is costly, so partial progress is sent at most twice a second.
+  if(overviewUploaded===overviewIndex)return;
+  const now=performance.now();
+  if(overviewIndex<layoutItems.length&&now-overviewUploadedAt<500){codeTexturesPending=true;return;}
+  renderer.setCodeTexture(overviewCanvas);overviewUploaded=overviewIndex;overviewUploadedAt=now;
+}
+function drawCodeOverview(ctx){
+  fillCodeOverview();
   const zoom=renderer.camera.zoom;
   ctx.save();ctx.imageSmoothingEnabled=true;ctx.globalAlpha=.96;ctx.drawImage(overviewCanvas,viewport.clientWidth/2-renderer.camera.x*zoom,viewport.clientHeight/2-renderer.camera.y*zoom,1000*zoom,680*zoom);ctx.restore();
 }
@@ -553,8 +552,14 @@ function buildCodeTexture(item,rect){
   rememberCodeTexture(item,texture);item._codeSource=sourceKey;item._codeResolution=target;return texture;
 }
 function draw3dCode(ctx,visible){
-  // Draw far faces first; opaque top faces occlude text on faces behind them.
-  const faces=visible.map(entry=>({...entry,depth:renderer.project([entry.item.x+entry.item.w/2,entry.item.y+entry.item.h/2,entry.item.height]).depth})).sort((a,b)=>b.depth-a.depth);
+  // Roofs already show the GPU code overview. Only roofs close enough for its resolution to blur
+  // get a sharp per-file texture here, far faces first so nearer roofs cover them.
+  const faces=[];
+  for(const entry of visible){
+    const {item,rect}=entry;if(rect.w/Math.max(.001,item.w)<overviewScale*1.25)continue; // texture not yet magnified
+    faces.push({...entry,depth:renderer.project([item.x+item.w/2,item.y+item.h/2,item.height]).depth});
+  }
+  faces.sort((a,b)=>b.depth-a.depth);
   for(const {item,rect} of faces){
     const corners=tileCorners(item);if(corners.some(p=>!Number.isFinite(p.x)||!Number.isFinite(p.y)))continue;
     ctx.save();ctx.beginPath();corners.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.clip();
@@ -586,7 +591,10 @@ function animate(now){
     for(const key of Object.keys(cameraAnimation.to))renderer.camera[key]=cameraAnimation.from[key]+(cameraAnimation.to[key]-cameraAnimation.from[key])*eased;
     if(progress>=1)cameraAnimation=null;dirty=true;
   }
-  if(dirty){renderer.render();drawOverlay();dirty=codeTexturesPending;}
+  if(dirty){
+    // The overlay fills the code overview, so draw it before the GPU pass that samples it.
+    renderer.resize();drawOverlay();renderer.codeOn=showCode;renderer.render();dirty=codeTexturesPending;
+  }
   const delta=now-lastFrame;lastFrame=now;if(delta<100){frameSamples.push(delta);if(frameSamples.length>45)frameSamples.shift();if(frameSamples.length&&Math.floor(now/500)!==Math.floor((now-delta)/500)){const average=frameSamples.reduce((a,b)=>a+b,0)/frameSamples.length;$('#fps').textContent=`${Math.round(1000/average)} fps · ${(average).toFixed(1)} ms`;}}
   requestAnimationFrame(animate);
 }

@@ -89,8 +89,6 @@ kbd { font: 500 10px/1.5 var(--mono); border: 1px solid var(--line-strong); bord
 }
 .tool { width: 30px; padding: 0; display: grid; place-items: center; }
 .tool svg { width: 16px; height: 16px; display: block; fill: none; stroke: currentColor; stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round; }
-.tool-link { text-decoration: none; }
-.github-link svg { fill: currentColor; stroke: none; }
 .metric { padding: 0 10px; display: flex; gap: 6px; align-items: center; font-weight: 500; }
 .metric b { font: 500 13px/1 var(--mono); opacity: .8; }
 .tool:hover, .metric:hover { color: var(--text); background: var(--hover); }
@@ -385,7 +383,7 @@ html[data-input-method="pointer"] button:focus { outline: none; }
   .tabs { height: 40px; }
   .tab { height: 40px; }
   .panel { height: calc(100% - 40px); padding: 10px 12px; }
-  .separator, #layersButton, #codeButton, .palette, .brand, .metric-switch, #mapButton, .github-link, .toolbar-spacer { display: none; }
+  .separator, #layersButton, #codeButton, .palette, .brand, .metric-switch, #mapButton, .toolbar-spacer { display: none; }
   .filter-wrap { flex: 1; width: auto; min-width: 65px; }
   .dialog-shell { padding: 22px; }
   .welcome { padding: 20px; }

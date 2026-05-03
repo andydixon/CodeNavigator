@@ -13,29 +13,21 @@ const VERTICES = new Float32Array([
   0,1,0, 0,0,0, 1,0,0, 0,1,0, 1,0,0, 1,1,0,
 ]);
 
-// Shared by the tile and grid programs so both use one camera. The 3D branch returns a real
-// clip-space w (the view depth), which keeps textures perspective-correct on roofs while
-// producing exactly the same screen positions as project() in JS.
+// Shared by every program. 2D is an orthographic map; 3D goes through the same view-projection
+// matrix that project() uses in JS, so WebGL, the overlay and picking agree exactly.
 const PROJECT = `
 uniform vec2 uCenter;
 uniform vec2 uViewport;
 uniform float uZoom;
 uniform float uMode;
-uniform vec2 uOrbit;
-uniform float uDistance;
+uniform mat4 uViewProj;
+uniform float uHeightScale;
 vec4 projectWorld(vec3 world){
   if(uMode < .5){
     vec2 p = (world.xy - uCenter) * uZoom;
     return vec4(p.x * 2.0 / uViewport.x, -p.y * 2.0 / uViewport.y, min(world.z, 1.0) * .001, 1.0);
   }
-  vec3 p = vec3((world.xy - uCenter) / 420.0, world.z / 170.0);
-  float cy=cos(uOrbit.x), sy=sin(uOrbit.x), cp=cos(uOrbit.y), sp=sin(uOrbit.y);
-  p = vec3(cy*p.x-sy*p.y, sy*p.x+cy*p.y, p.z);
-  // Positive pitch places the camera above the ground plane.
-  p = vec3(p.x, cp*p.y+sp*p.z, -sp*p.y+cp*p.z);
-  float depth = max(.5, uDistance - p.y);
-  float aspect = uViewport.x / uViewport.y;
-  return vec4(p.x/aspect*2.7, (p.z-.35)*2.7, (depth-1.0)/10.0*depth, depth);
+  return uViewProj * vec4(world.xy, world.z * uHeightScale, 1.0);
 }`;
 
 const VS = `#version 300 es
@@ -117,6 +109,11 @@ function shader(gl, type, source) {
   return value;
 }
 
+import { perspective, lookAt, multiply, transform, orbitPose, ORBIT_FOV } from './camera.js';
+
+// Landscape heights are exaggerated relative to the 1000x680 map so small repositories still read as 3D.
+const LANDSCAPE_HEIGHT_SCALE = 420 / 170;
+
 export class LandscapeRenderer {
   constructor(canvas) {
     this.canvas = canvas;
@@ -162,7 +159,7 @@ export class LandscapeRenderer {
     this.width=Math.max(1,this.canvas.clientWidth); this.height=Math.max(1,this.canvas.clientHeight);
     const dpr=Math.min(devicePixelRatio||1,2), w=Math.max(1,Math.floor(this.width*dpr)), h=Math.max(1,Math.floor(this.height*dpr));
     if(this.canvas.width!==w||this.canvas.height!==h){this.canvas.width=w;this.canvas.height=h;}
-    this.dpr=dpr; this.gl.viewport(0,0,w,h);
+    this.dpr=dpr; this.gl.viewport(0,0,w,h); this.updateView();
   }
 
   // Uploads the code overview canvas as the roof texture; call again after it changes.
@@ -184,15 +181,23 @@ export class LandscapeRenderer {
     gl.uniform2f(u.uViewport,this.width,this.height);
     gl.uniform1f(u.uZoom,this.camera.zoom);
     gl.uniform1f(u.uMode,this.mode==='3d'?1:0);
-    gl.uniform2f(u.uOrbit,this.camera.yaw,this.camera.pitch);
-    gl.uniform1f(u.uDistance,this.camera.distance);
+    gl.uniformMatrix4fv(u.uViewProj,false,this.viewProj);
+    gl.uniform1f(u.uHeightScale,this.heightScale);
+  }
+
+  // Recomputes the 3D view-projection from the camera; called once per frame and before picking.
+  updateView() {
+    this.heightScale=LANDSCAPE_HEIGHT_SCALE;
+    const pose=orbitPose(this.camera);
+    this.eye=pose.eye;
+    this.viewProj=multiply(perspective(ORBIT_FOV,this.width/this.height,4,60000),lookAt(pose.eye,pose.target,pose.up));
   }
 
   render(alpha=1) {
     const gl=this.gl; this.resize();
     gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
-    const names=['uCenter','uViewport','uZoom','uMode','uOrbit','uDistance','uAlpha','uCode','uCodeOn'];
+    const names=['uCenter','uViewport','uZoom','uMode','uViewProj','uHeightScale','uAlpha','uCode','uCodeOn'];
     this.uniforms||=Object.fromEntries(names.map(n=>[n,gl.getUniformLocation(this.program,n)]));
     this.gridUniforms||=Object.fromEntries(names.map(n=>[n,gl.getUniformLocation(this.gridProgram,n)]));
     if(this.mode==='3d'){
@@ -208,13 +213,6 @@ export class LandscapeRenderer {
     gl.drawArraysInstanced(gl.TRIANGLES,0,36,this.count);
   }
 
-  // Per-frame trigonometry for project(); camera values only change between frames.
-  basis() {
-    const c=this.camera,b=this._basis||(this._basis={});
-    if(b.yaw!==c.yaw||b.pitch!==c.pitch){b.yaw=c.yaw;b.pitch=c.pitch;b.cy=Math.cos(c.yaw);b.sy=Math.sin(c.yaw);b.cp=Math.cos(c.pitch);b.sp=Math.sin(c.pitch);}
-    return b;
-  }
-
   screenRect(item) {
     if(this.mode==='2d') return { x:(item.x-this.camera.x)*this.camera.zoom+this.width/2, y:(item.y-this.camera.y)*this.camera.zoom+this.height/2, w:item.w*this.camera.zoom, h:item.h*this.camera.zoom };
     let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
@@ -225,11 +223,11 @@ export class LandscapeRenderer {
     return {x:x0,y:y0,w:x1-x0,h:y1-y0};
   }
 
+  // Screen position of a world point; depth is the view distance, and points behind the camera are NaN.
   project([x,y,z=0]) {
-    const {cy,sy,cp,sp}=this.basis(),dx=(x-this.camera.x)/420,dy=(y-this.camera.y)/420,dz=z/170;
-    const rx=cy*dx-sy*dy,ry=sy*dx+cy*dy,py=cp*ry+sp*dz,pz=-sp*ry+cp*dz;
-    const depth=Math.max(.5,this.camera.distance-py),w=this.width,h=this.height;
-    return {x:w/2+(rx/(depth*w/h)*2.7)*w/2,y:h/2-((pz-.35)/depth*2.7)*h/2,depth};
+    const [cx,cy,,cw]=transform(this.viewProj,x,y,z*this.heightScale);
+    if(cw<=1e-3)return {x:NaN,y:NaN,depth:Infinity};
+    return {x:(cx/cw+1)/2*this.width,y:(1-cy/cw)/2*this.height,depth:cw};
   }
 
   worldAt(clientX,clientY) {

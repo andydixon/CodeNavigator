@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { perspective, lookAt, multiply, transform, orbitPose, ORBIT_FOV } from '../web/camera.js';
+import { perspective, lookAt, multiply, transform, invert, orbitPose, ORBIT_FOV } from '../web/camera.js';
 
 // The landscape projection before the real camera, kept as the reference.
 function legacyProject(camera, [x, y, z], width, height) {
@@ -25,4 +25,10 @@ test('orbit camera reproduces the legacy landscape projection', () => {
       assert.ok(Math.abs(cw / 420 - legacy.depth) < 1e-3, `depth ${cw / 420} vs ${legacy.depth}`);
     }
   }
+});
+
+test('invert undoes a view-projection', () => {
+  const m = multiply(perspective(1, 1.5, .1, 1000), lookAt([3, 4, 5], [0, 0, 0]));
+  const inv = invert(m), id = multiply(m, inv);
+  for (let i = 0; i < 16; i++) assert.ok(Math.abs(id[i] - (i % 5 === 0 ? 1 : 0)) < 1e-4, `${i}: ${id[i]}`);
 });

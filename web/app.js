@@ -1,4 +1,5 @@
-import { LandscapeRenderer } from './renderer.js';
+import { LandscapeRenderer, KIND } from './renderer.js';
+import { layoutCity, squarifiedLayout, spatialIndex, pickRay } from './city.js';
 import { apiFetch, progressEvents } from './api.mjs';
 
 const configuredBackend=window.CODENAVIGATOR_CONFIG?.backendUrl?.trim()||'';
@@ -44,6 +45,7 @@ let searchHits=[];
 let expandedCoverageLayer=null;
 let coverageActiveIndex=-1;
 let cameraAnimation=null;
+let cityModel=null,cityEntries=[],cityIndex=null,cityFitted=false;
 let currentSnapshot=null;
 let currentName='';
 let currentMetric='lines';
@@ -85,36 +87,6 @@ function makeTree(list){
   weigh(root); return root;
 }
 
-function squarifiedLayout(entries,x,y,w,h,depth,output){
-  if(!entries.length||w<=0||h<=0)return;
-  const total=entries.reduce((sum,entry)=>sum+Math.max(.0001,entry.weight),0),scale=w*h/total;
-  const remaining=entries.map(entry=>({entry,area:Math.max(.0001,entry.weight)*scale}));
-  const worst=(row,side)=>{
-    if(!row.length)return Infinity;
-    const sum=row.reduce((value,item)=>value+item.area,0),largest=Math.max(...row.map(item=>item.area)),smallest=Math.min(...row.map(item=>item.area)),sideSquared=side*side;
-    return Math.max(sideSquared*largest/(sum*sum),(sum*sum)/(sideSquared*smallest));
-  };
-  const place=row=>{
-    const area=row.reduce((value,item)=>value+item.area,0);
-    if(w>=h){
-      const rowWidth=Math.min(w,area/Math.max(.0001,h));let rowY=y;
-      for(const item of row){const itemHeight=item.area/Math.max(.0001,rowWidth);output(item.entry,x,rowY,rowWidth,itemHeight,depth);rowY+=itemHeight;}
-      x+=rowWidth;w=Math.max(0,w-rowWidth);
-    }else{
-      const rowHeight=Math.min(h,area/Math.max(.0001,w));let rowX=x;
-      for(const item of row){const itemWidth=item.area/Math.max(.0001,rowHeight);output(item.entry,rowX,y,itemWidth,rowHeight,depth);rowX+=itemWidth;}
-      y+=rowHeight;h=Math.max(0,h-rowHeight);
-    }
-  };
-  let row=[];
-  while(remaining.length){
-    const next=remaining[0],side=Math.max(.0001,Math.min(w,h));
-    if(!row.length||worst([...row,next],side)<=worst(row,side)){row.push(remaining.shift());}
-    else{place(row);row=[];}
-  }
-  if(row.length)place(row);
-}
-
 function computeLayout(){
   const root=makeTree(files); layoutItems=[];directoryRects=[];
   function visit(node,x,y,w,h,depth){
@@ -137,7 +109,29 @@ function computeLayout(){
   }
   visit(root,0,0,1000,680,0);
   layoutById=new Map(layoutItems.map(item=>[item.id,item]));buildSpatialGrid();resetCodeCaches();
-  renderer.setData(layoutItems);dirty=true;
+  renderer.setData(layoutItems);computeCity();renderer.setSelected(selected?.id||0);dirty=true;
+}
+
+// The city shares files, colours and the code overview atlas with the landscape but has its own
+// street layout in metres. Each layout item keeps its building as item.city.
+function computeCity(){
+  cityModel=layoutCity(files,currentName);
+  const instances=[{x:-80,y:-80,w:cityModel.width+160,h:cityModel.height+160,height:.02,color:[0,0,0],kind:KIND.ground}];
+  for(const block of cityModel.blocks)if(block.depth>0)instances.push({x:block.x,y:block.y,w:block.w,h:block.h,height:.1+.06*Math.min(block.depth,4),color:[.55,.6,.9],kind:KIND.block});
+  cityEntries=[];
+  for(const item of layoutItems){
+    const building=cityModel.buildings.get(item.id);if(!building)continue;
+    item.city={...building,file:item};cityEntries.push(item.city);
+    instances.push({...building,color:item.color,atlas:[item.x/1000,item.y/680,item.w/1000,item.h/680],kind:KIND.building,id:item.id});
+  }
+  cityIndex=spatialIndex(cityEntries);
+  renderer.setCity(instances,{width:cityModel.width,height:cityModel.height});
+}
+
+function fitCity(){
+  if(!cityModel)return;
+  Object.assign(renderer.city,{view:'heli',x:cityModel.width/2,y:cityModel.height/2,yaw:-.35,pitch:.72,distance:Math.max(cityModel.width,cityModel.height)*1.05});
+  cityFitted=true;dirty=true;
 }
 
 function resetCodeCaches(){
@@ -169,12 +163,13 @@ function applySnapshot(snapshot){
   files=snapshot.files||[];for(const file of files)file.symbols||=[];edges=snapshot.edges||[];currentName=snapshot.name||'codebase';currentSnapshot=snapshot.id||null;selected=null;history=[];searchHits=[];expandedCoverageLayer=null;coverageActiveIndex=-1;cameraAnimation=null;
   fileById=new Map(files.map(file=>[file.id,file]));referenceDegree=new Map();edgesByFile=new Map();let known=0,inferred=0;for(const edge of edges){referenceDegree.set(edge.from,(referenceDegree.get(edge.from)||0)+1);referenceDegree.set(edge.to,(referenceDegree.get(edge.to)||0)+1);for(const id of [edge.from,edge.to]){const list=edgesByFile.get(id);if(list)list.push(edge);else edgesByFile.set(id,[edge]);}if(edge.confidence==='known')known++;else inferred++;}
   const layers=new Map();for(const file of files){const layer=file.layer in layerLabels?file.layer:'unknown';layers.set(layer,(layers.get(layer)||0)+1);}sceneStats={definitions:snapshot.definitions??files.reduce((n,file)=>n+(file.symbolCount||0),0),totalLines:snapshot.totalLines??files.reduce((n,file)=>n+file.lines,0),known,inferred,layers};
-  computeLayout();fitScene();updateStats(snapshot);renderInspector();renderResults([]);renderHistory();
+  computeLayout();fitScene();fitCity();updateStats(snapshot);renderInspector();renderResults([]);renderHistory();
   $('#breadcrumbText').textContent=currentName;$('#emptyState').hidden=files.length>0;$('#welcome').hidden=true;
 }
 
 function fitScene(){
   cameraAnimation=null;
+  if(renderer.mode==='city'){fitCity();return;}
   renderer.camera.x=500;renderer.camera.y=340;
   renderer.camera.zoom=Math.min((viewport.clientWidth-24)/1000,(viewport.clientHeight-24)/680);
   renderer.camera.distance=3.5;renderer.camera.yaw=-.12;renderer.camera.pitch=.76;dirty=true;
@@ -187,6 +182,16 @@ function pan3d(dx,dy){
   // Keep the grabbed ground point beneath the pointer in screen space.
   renderer.camera.x+=(-dx*cy-dy*sy)*scale;
   renderer.camera.y+=( dx*sy-dy*cy)*scale;
+}
+
+function dragCity(dx,dy,action){
+  const c=renderer.city;if(c.view!=='heli')return;
+  if(action==='pan'){const scale=c.distance*.0016,cy=Math.cos(c.yaw),sy=Math.sin(c.yaw);c.x+=(-dx*cy-dy*sy)*scale;c.y+=(dx*sy-dy*cy)*scale;}
+  else{c.yaw-=dx*.007;c.pitch=Math.max(.08,Math.min(1.5,c.pitch+dy*.006));}
+}
+function dollyCity(amount){
+  const c=renderer.city,size=Math.max(cityModel?.width||1000,cityModel?.height||1000);
+  if(c.view==='heli')c.distance=Math.max(12,Math.min(size*3,c.distance*Math.exp(amount)));
 }
 
 function dolly3d(amount){
@@ -314,7 +319,7 @@ function selectFile(file,addHistory=true){
   if(!file)coverageActiveIndex=-1;
   if(file&&addHistory){history=history.filter(item=>item.id!==file.id);history.unshift(file);history=history.slice(0,30);renderHistory();}
   $('#breadcrumbText').textContent=file?`${currentName}  ›  ${file.path}`:currentName;
-  renderInspector();if(file)loadFileDetails(file);dirty=true;
+  renderer.setSelected(file?.id||0);renderInspector();if(file)loadFileDetails(file);dirty=true;
 }
 
 function renderInspector(){
@@ -388,19 +393,21 @@ function renderHistory(){
 
 function focusFile(file){
   const item=layoutById.get(file.id);if(!item)return;
+  if(renderer.mode==='city'){const b=item.city;if(b){renderer.city.view='heli';animateCameraTo({x:b.x+b.w/2,y:b.y+b.h/2,distance:Math.max(90,Math.max(b.w,b.h,b.height)*3.2)},renderer.city);}return;}
   const target={x:item.x+item.w/2,y:item.y+item.h/2};
   if(renderer.mode==='2d'){const fit=Math.min(viewport.clientWidth/Math.max(.2,item.w*1.35),viewport.clientHeight/Math.max(.2,item.h*1.35),MAX_2D_ZOOM);target.zoom=Math.min(MAX_2D_ZOOM,Math.max(fit,9/codeWorldFont(item)));}
   else target.distance=2.25;
   animateCameraTo(target);
 }
 
-function animateCameraTo(target){
-  const from={},to={};for(const [key,value] of Object.entries(target)){from[key]=renderer.camera[key];to[key]=value;}
-  if(matchMedia('(prefers-reduced-motion: reduce)').matches){Object.assign(renderer.camera,to);cameraAnimation=null;dirty=true;return;}
-  cameraAnimation={from,to,start:performance.now(),duration:620};dirty=true;
+function animateCameraTo(target,camera=activeCamera(),duration=620){
+  const from={},to={};for(const [key,value] of Object.entries(target)){from[key]=camera[key];to[key]=value;}
+  if(matchMedia('(prefers-reduced-motion: reduce)').matches){Object.assign(camera,to);cameraAnimation=null;dirty=true;return;}
+  cameraAnimation={camera,from,to,start:performance.now(),duration};dirty=true;
 }
 
 function cancelCameraAnimation(){cameraAnimation=null;}
+function activeCamera(){return renderer.mode==='city'?renderer.city:renderer.camera;}
 
 function switchTab(name){$$('.tab').forEach(tab=>{const active=tab.dataset.tab===name;tab.classList.toggle('active',active);tab.setAttribute('aria-selected',String(active));tab.tabIndex=active?0:-1;});$$('.panel').forEach(panel=>panel.classList.toggle('active',panel.id===`panel-${name}`));}
 $$('.tab').forEach(tab=>tab.addEventListener('click',()=>switchTab(tab.dataset.tab)));
@@ -431,6 +438,7 @@ function drawOverlay(){
   resizeOverlay();const ctx=overlayCtx,w=overlay.clientWidth,h=overlay.clientHeight;ctx.clearRect(0,0,w,h);ctx.save();ctx.font='600 11px Inter, system-ui, sans-serif';ctx.textBaseline='top';
   codeTexturesPending=false;
   codeTextureDeadline=performance.now()+5;
+  if(renderer.mode==='city'){visibleScreenItems=[];drawCityOverlay(ctx);ctx.restore();return;}
   const hitIds=new Set(searchHits.map(hit=>hit.entityId??hit.id)),occupied=[],visible=visibleLayout(w,h);visibleScreenItems=visible;
   let labelCount=0;
   if(showCode&&renderer.mode==='2d'){
@@ -461,6 +469,18 @@ function drawOverlay(){
   drawSelectedConnections(ctx);
   if(selected){const item=layoutById.get(selected.id);if(item){const rect=renderer.screenRect(item);ctx.strokeStyle='#fff08a';ctx.lineWidth=2.5;if(renderer.mode==='3d'){ctx.beginPath();tileCorners(item).forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.stroke();}else ctx.strokeRect(rect.x-1,rect.y-1,rect.w+2,rect.h+2);drawFileChip(ctx,item,rect,'#fff08a',null,true);}}
   ctx.restore();
+}
+
+function drawCityOverlay(ctx){
+  if(showCode){fillCodeOverview();uploadCodeOverview();}
+  if(!cityModel)return;
+  const occupied=[],w=renderer.width,h=renderer.height;let count=0;
+  if(selected?.id){const b=layoutById.get(selected.id)?.city;if(b){const p=renderer.project([b.x+b.w/2,b.y+b.h/2,b.height+2]);if(p.x>=0&&p.x<=w&&p.y>=0&&p.y<=h)drawChip(ctx,selected.name,p.x,p.y-22,220,'#fff08a',occupied,true,'center');}}
+  for(const block of cityModel.blocks){
+    if(block.depth!==1||count>=40)continue;
+    const p=renderer.project([block.x+block.w/2,block.y+block.h/2,0]);if(!(p.x>=0&&p.x<=w&&p.y>=0&&p.y<=h))continue;
+    if(drawChip(ctx,`${block.node.name}/`,p.x,p.y-8,180,'#8d7dff',occupied,false,'center'))count++;
+  }
 }
 
 function tileCorners(item){return [[item.x,item.y],[item.x+item.w,item.y],[item.x+item.w,item.y+item.h],[item.x,item.y+item.h]].map(([x,y])=>renderer.project([x,y,item.height||0]));}
@@ -588,7 +608,7 @@ function drawCodeTexture(ctx,item,rect){
 function animate(now){
   if(cameraAnimation){
     const progress=Math.min(1,(now-cameraAnimation.start)/cameraAnimation.duration),eased=1-(1-progress)**4;
-    for(const key of Object.keys(cameraAnimation.to))renderer.camera[key]=cameraAnimation.from[key]+(cameraAnimation.to[key]-cameraAnimation.from[key])*eased;
+    for(const key of Object.keys(cameraAnimation.to))cameraAnimation.camera[key]=cameraAnimation.from[key]+(cameraAnimation.to[key]-cameraAnimation.from[key])*eased;
     if(progress>=1)cameraAnimation=null;dirty=true;
   }
   if(dirty){
@@ -601,6 +621,7 @@ function animate(now){
 
 function pickAt(x,y){
   if(renderer.mode==='2d'){const world=renderer.worldAt(x,y),cell=spatialGrid.get(`${Math.floor(world.x/spatialCell)}:${Math.floor(world.y/spatialCell)}`)||[];let match=null,area=Infinity;for(const item of cell){if(world.x>=item.x&&world.x<=item.x+item.w&&world.y>=item.y&&world.y<=item.y+item.h){const next=item.w*item.h;if(next<area){match=item;area=next;}}}return match;}
+  if(renderer.mode==='city'){const {origin,dir}=renderer.ray(x,y);return pickRay(origin,dir,cityEntries)?.entry.file||null;}
   let best=null,depth=Infinity;
   for(const {item,rect} of visibleScreenItems){
     if(x<rect.x||x>rect.x+rect.w||y<rect.y||y>rect.y+rect.h)continue;
@@ -617,7 +638,7 @@ function pickAt(x,y){
 viewport.addEventListener('pointerdown',event=>{
   // Only drags that start on the map; pointer capture would otherwise swallow clicks on floating controls.
   if(event.button>2||event.target!==glCanvas)return;
-  const pan=renderer.mode==='3d'&&(event.button===1||event.button===2||event.shiftKey||event.altKey||event.metaKey||event.ctrlKey);
+  const pan=renderer.mode!=='2d'&&(event.button===1||event.button===2||event.shiftKey||event.altKey||event.metaKey||event.ctrlKey);
   if(renderer.mode==='2d'&&event.button!==0)return;
   event.preventDefault();
   cancelCameraAnimation();
@@ -629,6 +650,7 @@ viewport.addEventListener('pointermove',event=>{
   if(pointer.down&&event.pointerId===pointer.id){
     const dx=event.clientX-pointer.x,dy=event.clientY-pointer.y;pointer.x=event.clientX;pointer.y=event.clientY;
     if(renderer.mode==='2d'){renderer.camera.x-=dx/renderer.camera.zoom;renderer.camera.y-=dy/renderer.camera.zoom;}
+    else if(renderer.mode==='city')dragCity(dx,dy,pointer.action);
     else if(pointer.action==='pan')pan3d(dx,dy);
     else{renderer.camera.yaw-=dx*.007;renderer.camera.pitch=Math.max(.045,Math.min(1.525,renderer.camera.pitch+dy*.006));}
     dirty=true;$('#tooltip').hidden=true;return;
@@ -644,11 +666,11 @@ function finishPointer(event){
 viewport.addEventListener('pointerup',finishPointer);
 viewport.addEventListener('pointercancel',finishPointer);
 viewport.addEventListener('pointerleave',()=>{$('#tooltip').hidden=true;});
-viewport.addEventListener('contextmenu',event=>{if(renderer.mode==='3d')event.preventDefault();});
-viewport.addEventListener('wheel',event=>{event.preventDefault();cancelCameraAnimation();if(renderer.mode==='3d'){dolly3d(event.deltaY*.00115);dirty=true;return;}const rect=viewport.getBoundingClientRect(),x=event.clientX-rect.left,y=event.clientY-rect.top,before=renderer.worldAt(x,y),factor=Math.exp(-event.deltaY*.0012);renderer.camera.zoom=Math.max(.25,Math.min(MAX_2D_ZOOM,renderer.camera.zoom*factor));const after=renderer.worldAt(x,y);renderer.camera.x+=before.x-after.x;renderer.camera.y+=before.y-after.y;dirty=true;},{passive:false});
+viewport.addEventListener('contextmenu',event=>{if(renderer.mode!=='2d')event.preventDefault();});
+viewport.addEventListener('wheel',event=>{event.preventDefault();cancelCameraAnimation();if(renderer.mode==='city'){dollyCity(event.deltaY*.00115);dirty=true;return;}if(renderer.mode==='3d'){dolly3d(event.deltaY*.00115);dirty=true;return;}const rect=viewport.getBoundingClientRect(),x=event.clientX-rect.left,y=event.clientY-rect.top,before=renderer.worldAt(x,y),factor=Math.exp(-event.deltaY*.0012);renderer.camera.zoom=Math.max(.25,Math.min(MAX_2D_ZOOM,renderer.camera.zoom*factor));const after=renderer.worldAt(x,y);renderer.camera.x+=before.x-after.x;renderer.camera.y+=before.y-after.y;dirty=true;},{passive:false});
 viewport.addEventListener('dblclick',event=>{const rect=viewport.getBoundingClientRect(),file=pickAt(event.clientX-rect.left,event.clientY-rect.top);if(file){selectFile(file);focusFile(file);}});
 
-$$('[data-view]').forEach(button=>button.addEventListener('click',()=>{cancelCameraAnimation();$$('[data-view]').forEach(v=>v.classList.toggle('active',v===button));renderer.mode=button.dataset.view;if(renderer.mode==='3d')renderer.camera.zoom=1;$('#cameraHelp').hidden=renderer.mode!=='3d';dirty=true;}));
+$$('[data-view]').forEach(button=>button.addEventListener('click',()=>{cancelCameraAnimation();$$('[data-view]').forEach(v=>v.classList.toggle('active',v===button));renderer.mode=button.dataset.view;if(renderer.mode==='3d')renderer.camera.zoom=1;if(renderer.mode==='city'&&!cityFitted)fitCity();$('#cameraHelp').hidden=renderer.mode!=='3d';dirty=true;}));
 $$('[data-metric]').forEach(button=>button.addEventListener('click',()=>{$$('[data-metric]').forEach(v=>v.classList.toggle('active',v===button));currentMetric=button.dataset.metric;computeLayout();}));
 $('#codeButton').classList.toggle('active',showCode);$('#codeButton').addEventListener('click',event=>{showCode=!showCode;event.currentTarget.classList.toggle('active',showCode);dirty=true;});
 $('#homeButton').addEventListener('click',()=>{selectFile(null);fitScene();});
@@ -795,7 +817,7 @@ $('#fpsToggle').addEventListener('change',event=>{$('#fps').hidden=!event.target
 $('#paletteButton').addEventListener('click',savePreferences);$('#codeButton').addEventListener('click',savePreferences);
 $('#dismissProgress').addEventListener('click',()=>{$('#progressCard').hidden=true;});
 $('#fitButton').addEventListener('click',fitScene);
-function zoomStep(direction){cancelCameraAnimation();if(renderer.mode==='3d')dolly3d(-direction*.22);else renderer.camera.zoom=Math.max(.25,Math.min(MAX_2D_ZOOM,renderer.camera.zoom*Math.exp(direction*.3)));dirty=true;}
+function zoomStep(direction){cancelCameraAnimation();if(renderer.mode==='city')dollyCity(-direction*.22);else if(renderer.mode==='3d')dolly3d(-direction*.22);else renderer.camera.zoom=Math.max(.25,Math.min(MAX_2D_ZOOM,renderer.camera.zoom*Math.exp(direction*.3)));dirty=true;}
 $('#zoomInButton').addEventListener('click',()=>zoomStep(1));$('#zoomOutButton').addEventListener('click',()=>zoomStep(-1));
 $$('.canvas-controls, .breadcrumb, .progress-card, .legend, .camera-help').forEach(control=>{['pointerdown','dblclick','wheel'].forEach(type=>control.addEventListener(type,event=>event.stopPropagation()));});
 $$('[data-camera-preset]').forEach(button=>button.addEventListener('click',()=>{
@@ -803,7 +825,7 @@ $$('[data-camera-preset]').forEach(button=>button.addEventListener('click',()=>{
   const from={...renderer.camera},to={...from,...poses[button.dataset.cameraPreset]};
   cancelCameraAnimation();
   if(matchMedia('(prefers-reduced-motion: reduce)').matches)Object.assign(renderer.camera,to);
-  else cameraAnimation={from,to,start:performance.now(),duration:450};
+  else cameraAnimation={camera:renderer.camera,from,to,start:performance.now(),duration:450};
   dirty=true;
 }));
 dialog.addEventListener('click',event=>{if(event.target===dialog)dialog.close();});

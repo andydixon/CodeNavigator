@@ -309,7 +309,7 @@ function mountSourceViewer(file){
     frame=0;const version=++drawVersion,start=Math.max(0,Math.floor(viewer.scrollTop/lineHeight)-12),count=Math.ceil(viewer.clientHeight/lineHeight)+24,chunkStart=Math.floor(start/600)*600;
     const lines=await loadSourceChunk(file,chunkStart,600);if(version!==drawVersion||!viewer.isConnected)return;
     const offset=start-chunkStart,end=Math.min(lines.length,offset+count);windowElement.style.transform=`translateY(${start*lineHeight}px)`;
-    windowElement.innerHTML=lines.slice(offset,end).map((line,index)=>`<span class="source-line" data-line="${start+index+1}">${highlightSource(line,file)||'&nbsp;'}</span>`).join('');
+    windowElement.innerHTML=lines.slice(offset,end).map((line,index)=>`<span class="source-line" data-line="${start+index+1}">${line?highlightSource(line,file):'&nbsp;'}</span>`).join('');
   };
   viewer.addEventListener('scroll',()=>{if(!frame)frame=requestAnimationFrame(draw);},{passive:true});draw();
 }

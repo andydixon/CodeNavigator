@@ -81,6 +81,18 @@
           <span><b>Scroll</b> dolly</span>
           <span><b>F</b> reset</span>
         </div>
+        <div class="city-hud" id="cityHud" hidden>
+          <div class="city-views" role="group" aria-label="City camera">
+            <button type="button" data-city-view="heli" title="Helicopter (1)"><kbd>1</kbd> Helicopter</button>
+            <button type="button" data-city-view="walk" title="Walk (2)"><kbd>2</kbd> Walk</button>
+            <button type="button" data-city-view="fly" title="Fly (3)"><kbd>3</kbd> Fly</button>
+          </div>
+          <span class="city-help" id="cityHelp"></span>
+        </div>
+        <div class="crosshair" id="crosshair" hidden></div>
+        <div class="city-target" id="cityTarget" hidden></div>
+        <div class="city-address" id="cityAddress" hidden></div>
+        <canvas class="minimap" id="minimap" width="220" height="150" hidden title="Click to travel"></canvas>
         <nav class="breadcrumb" id="breadcrumb" aria-label="Selected file path">
           <button id="homeButton" aria-label="Fit entire codebase">←</button>
           <span id="breadcrumbText">No codebase loaded</span>

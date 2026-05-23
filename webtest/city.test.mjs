@@ -59,3 +59,49 @@ test('spatial index finds boxes near a point', () => {
   assert.deepEqual([...index.near(2, 2, 3)], [a]);
   assert.deepEqual([...index.near(100, 100, 3)], []);
 });
+
+import { collide, heading, stepCamera, blockAt, groundHit, MOVE } from '../web/city.js';
+
+test('collision pushes a walker out of buildings but leaves streets alone', () => {
+  const box = { x: 0, y: 0, w: 10, h: 10, height: 20 }, index = spatialIndex([box]);
+  assert.deepEqual(collide(20, 20, .5, index), { x: 20, y: 20 });
+  const edge = collide(10.2, 5, .5, index);
+  assert.ok(Math.abs(edge.x - 10.5) < 1e-9 && edge.y === 5);
+  const inside = collide(9, 5, .5, index);
+  assert.ok(Math.abs(inside.x - 10.5) < 1e-9, `inside exits nearest wall: ${inside.x}`);
+});
+
+test('headings are orthogonal and yaw 0 faces north', () => {
+  for (const yaw of [0, .7, 2, -2.5]) {
+    const { forward, right } = heading(yaw);
+    assert.ok(Math.abs(forward[0] * right[0] + forward[1] * right[1]) < 1e-12);
+  }
+  assert.deepEqual(heading(0).forward.map(v => Math.round(v)), [-0, -1]);
+});
+
+test('walking moves at walking speed, collides, and stays on the ground', () => {
+  const index = spatialIndex([{ x: -5, y: -20, w: 10, h: 5, height: 30 }]);
+  const cam = { view: 'walk', ex: 0, ey: 0, ez: 1.7, lookYaw: 0, lookPitch: .5 };
+  stepCamera(cam, { forward: 1, right: 0, up: 1 }, 1, index, { width: 100, height: 100 });
+  assert.ok(Math.abs(cam.ey + MOVE.walk) < 1e-9 && cam.ez === MOVE.eyeHeight);
+  stepCamera(cam, { forward: 1, right: 0, up: 0 }, 2, index, { width: 100, height: 100 });
+  assert.ok(cam.ey >= -15 + MOVE.radius - 1e-9, `stopped at the wall, got ${cam.ey}`);
+});
+
+test('flying climbs with the view and clears low roofs', () => {
+  const index = spatialIndex([{ x: -5, y: -20, w: 10, h: 5, height: 10 }]);
+  const cam = { view: 'fly', ex: 0, ey: 0, ez: 50, lookYaw: 0, lookPitch: 0 };
+  stepCamera(cam, { forward: 1, right: 0, up: 0 }, 1, index, { width: 100, height: 100 });
+  assert.ok(cam.ey < -30, 'flew over the low building');
+  stepCamera(cam, { forward: 0, right: 0, up: -1 }, 10, index, { width: 100, height: 100 });
+  assert.equal(cam.ez, MOVE.eyeHeight);
+});
+
+test('addresses resolve to the deepest block and rays find the ground', () => {
+  const blocks = [{ depth: 0, x: 0, y: 0, w: 100, h: 100 }, { depth: 1, x: 0, y: 0, w: 50, h: 50, node: { path: 'src' } }, { depth: 2, x: 10, y: 10, w: 10, h: 10, node: { path: 'src/ui' } }];
+  assert.equal(blockAt(blocks, 15, 15).node.path, 'src/ui');
+  assert.equal(blockAt(blocks, 40, 40).node.path, 'src');
+  assert.equal(blockAt(blocks, 90, 90), null);
+  assert.deepEqual(groundHit([0, 0, 10], [0, Math.SQRT1_2, -Math.SQRT1_2]).map(v => Math.round(v)), [0, 10]);
+  assert.equal(groundHit([0, 0, 10], [0, 0, 1]), null);
+});

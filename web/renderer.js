@@ -165,7 +165,7 @@ export class LandscapeRenderer {
     this.landscape = this.boxLayer(); this.cityLayer = this.boxLayer();
     this.camera = { x: 500, y: 350, zoom: 1, yaw: -.1, pitch: .78, distance: 3.5 };
     // City camera: 'heli' orbits a ground target; 'walk' and 'fly' look out from an eye position.
-    this.city = { view: 'heli', x: 0, y: 0, yaw: -.12, pitch: .8, distance: 500, eye: [0, 0, EYE_HEIGHT], lookYaw: 0, lookPitch: 0 };
+    this.city = { view: 'heli', x: 0, y: 0, yaw: -.12, pitch: .8, distance: 500, ex: 0, ey: 0, ez: EYE_HEIGHT, lookYaw: 0, lookPitch: 0 };
     this.mode = '2d';
     this.resize();
   }
@@ -251,7 +251,7 @@ export class LandscapeRenderer {
       const eye = [c.x + sy * cp * c.distance, c.y + cy * cp * c.distance, sp * c.distance];
       return { eye, forward: [-sy * cp, -cy * cp, -sp] };
     }
-    return { eye: c.eye, forward: direction(c.lookYaw, c.lookPitch) };
+    return { eye: [c.ex, c.ey, c.ez], forward: direction(c.lookYaw, c.lookPitch) };
   }
 
   // Recomputes the 3D view-projection from the active camera; runs on every resize check.

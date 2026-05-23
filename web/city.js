@@ -140,3 +140,71 @@ export function pickRay(origin, dir, entries, maxDistance = Infinity) {
   }
   return best && { entry: best, distance };
 }
+
+// Pushes a circle of `radius` at (x, y) out of every building it overlaps.
+export function collide(x, y, radius, index) {
+  for (let pass = 0; pass < 3; pass++) {
+    let moved = false;
+    for (const b of index.near(x, y, radius + 1)) {
+      const nx = Math.max(b.x, Math.min(x, b.x + b.w)), ny = Math.max(b.y, Math.min(y, b.y + b.h));
+      let dx = x - nx, dy = y - ny;
+      const distance = Math.hypot(dx, dy);
+      if (distance >= radius) continue;
+      if (distance === 0) {
+        // Centre inside the footprint: leave through the nearest wall.
+        const exits = [[b.x - radius - x, 0], [b.x + b.w + radius - x, 0], [0, b.y - radius - y], [0, b.y + b.h + radius - y]];
+        [dx, dy] = exits.reduce((best, exit) => Math.hypot(...exit) < Math.hypot(...best) ? exit : best);
+        x += dx; y += dy;
+      } else {
+        x = nx + dx / distance * radius; y = ny + dy / distance * radius;
+      }
+      moved = true;
+    }
+    if (!moved) break;
+  }
+  return { x, y };
+}
+
+// Horizontal forward and right vectors for a heading; yaw 0 faces -y (north on the map).
+export function heading(yaw) {
+  return { forward: [-Math.sin(yaw), -Math.cos(yaw)], right: [Math.cos(yaw), -Math.sin(yaw)] };
+}
+
+export const MOVE = { walk: 7, run: 18, fly: 40, flyFast: 160, radius: .45, eyeHeight: 1.7 };
+
+// Advances a walk/fly camera by dt seconds. input: {forward, right, up} in -1..1 and run (bool).
+export function stepCamera(camera, input, dt, index, bounds) {
+  // Sub-steps keep a long frame from carrying the walker through a thin building.
+  for (; dt > .05; dt -= .05) stepCamera(camera, input, .05, index, bounds);
+  const fly = camera.view === 'fly', speed = (fly ? (input.run ? MOVE.flyFast : MOVE.fly) : (input.run ? MOVE.run : MOVE.walk)) * dt;
+  const { forward, right } = heading(camera.lookYaw);
+  let mx = forward[0] * input.forward + right[0] * input.right, my = forward[1] * input.forward + right[1] * input.right;
+  const length = Math.hypot(mx, my);
+  if (length > 1) { mx /= length; my /= length; }
+  let x = camera.ex + mx * speed, y = camera.ey + my * speed;
+  if (fly) {
+    // Flying follows the view pitch, so looking down and pressing forward descends.
+    const vertical = Math.sin(camera.lookPitch) * input.forward + input.up;
+    camera.ez = Math.max(MOVE.eyeHeight, Math.min(3000, camera.ez + vertical * speed));
+  } else {
+    camera.ez = MOVE.eyeHeight;
+  }
+  if (camera.ez < 400) ({ x, y } = collide(x, y, MOVE.radius, { near: (px, py, r) => [...index.near(px, py, r)].filter(b => b.height + .5 > camera.ez - MOVE.eyeHeight) }));
+  camera.ex = Math.max(-150, Math.min(bounds.width + 150, x));
+  camera.ey = Math.max(-150, Math.min(bounds.height + 150, y));
+  return camera;
+}
+
+// Deepest folder block containing a point, for the "you are here" address.
+export function blockAt(blocks, x, y) {
+  let best = null;
+  for (const block of blocks) if (block.depth > 0 && x >= block.x && x <= block.x + block.w && y >= block.y && y <= block.y + block.h && (!best || block.depth > best.depth)) best = block;
+  return best;
+}
+
+// Where a ray meets the ground plane (z = 0), or null if it points up.
+export function groundHit([ox, oy, oz], [dx, dy, dz]) {
+  if (dz >= -1e-6) return null;
+  const t = -oz / dz;
+  return [ox + dx * t, oy + dy * t];
+}

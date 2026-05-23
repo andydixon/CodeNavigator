@@ -1,5 +1,5 @@
 import { LandscapeRenderer, KIND } from './renderer.js';
-import { layoutCity, squarifiedLayout, spatialIndex, pickRay } from './city.js';
+import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, MOVE } from './city.js';
 import { apiFetch, progressEvents } from './api.mjs';
 
 const configuredBackend=window.CODENAVIGATOR_CONFIG?.backendUrl?.trim()||'';
@@ -126,7 +126,149 @@ function computeCity(){
   }
   cityIndex=spatialIndex(cityEntries);
   renderer.setCity(instances,{width:cityModel.width,height:cityModel.height});
+  buildMinimap();updateCityHud();
 }
+
+// ---- City navigation: helicopter, walk and fly cameras, HUD, crosshair and minimap ----
+const heldKeys=new Set(),MOVE_KEYS=new Set(['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight','Space','KeyC']);
+let minimapBase=null,cityTargetEntry=null,lastAddress='';
+const CITY_HELP={
+  heli:'<b>Drag</b> orbit · <b>Shift+drag</b> pan · <b>Scroll</b> zoom · <b>Double-click</b> a street to walk',
+  walk:'<b>Click</b> to look · <b>WASD</b> move · <b>Shift</b> run · <b>E</b> inspect · <b>Esc</b> release mouse',
+  fly:'<b>Click</b> to look · <b>WASD</b> fly · <b>Space</b>/<b>C</b> up/down · <b>Shift</b> fast · <b>E</b> inspect',
+};
+
+function setCityView(view,at){
+  const c=renderer.city;if(!cityModel||(view===c.view&&!at))return;
+  cancelCameraAnimation();
+  const {eye,forward}=renderer.cityPose();
+  if(view==='heli'){
+    // Rise out of the street, keeping the heading.
+    Object.assign(c,{view,x:c.ex,y:c.ey,yaw:c.lookYaw,pitch:.62,distance:Math.max(3,c.ez)});
+    animateCameraTo({distance:Math.max(180,c.ez*2)},c,1000);
+    if(document.pointerLockElement)document.exitPointerLock();
+  }else{
+    const fromHeli=c.view==='heli';
+    c.view=view;
+    if(fromHeli||at){
+      if(fromHeli)Object.assign(c,{ex:eye[0],ey:eye[1],ez:eye[2],lookYaw:Math.atan2(-forward[0],-forward[1]),lookPitch:Math.asin(Math.max(-1,Math.min(1,forward[2])))});
+      const target=at||[c.x,c.y],spot=collide(target[0],target[1],MOVE.radius*3,cityIndex);
+      animateCameraTo({ex:spot.x,ey:spot.y,ez:view==='walk'?MOVE.eyeHeight:Math.min(Math.max(60,c.ez*.5),260),lookYaw:view==='walk'?openHeading(spot.x,spot.y,c.lookYaw):c.lookYaw,lookPitch:view==='walk'?0:-.3},c,1100);
+    }else if(view==='walk'){
+      const spot=collide(c.ex,c.ey,MOVE.radius*3,cityIndex);
+      animateCameraTo({ex:spot.x,ey:spot.y,ez:MOVE.eyeHeight,lookPitch:0},c,800);
+    }
+  }
+  updateCityHud();dirty=true;
+}
+
+// Of eight headings, the one with the longest clear view at eye level, preferring the current one.
+function openHeading(x,y,current){
+  let best=current,clear=-1;
+  for(let i=0;i<8;i++){
+    const yaw=current+i*Math.PI/4,dir=[-Math.sin(yaw),-Math.cos(yaw),0];
+    const distance=Math.min(pickRay([x,y,MOVE.eyeHeight],dir,cityEntries,400)?.distance??400,400);
+    if(distance>clear+5){clear=distance;best=yaw;}
+  }
+  return best;
+}
+
+function stepCity(seconds){
+  const down=code=>heldKeys.has(code)?1:0;
+  stepCamera(renderer.city,{
+    forward:down('KeyW')+down('ArrowUp')-down('KeyS')-down('ArrowDown'),
+    right:down('KeyD')+down('ArrowRight')-down('KeyA')-down('ArrowLeft'),
+    up:down('Space')-down('KeyC'),
+    run:heldKeys.has('ShiftLeft')||heldKeys.has('ShiftRight'),
+  },seconds,cityIndex,cityModel);
+  dirty=true;
+}
+
+function lookCity(dx,dy){
+  const c=renderer.city;
+  c.lookYaw-=dx*.0022;c.lookPitch=Math.max(-1.45,Math.min(1.45,c.lookPitch-dy*.0022));dirty=true;
+}
+
+function handleCityKey(event){
+  const c=renderer.city;
+  if(/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName))return false;
+  const views={Digit1:'heli',Digit2:'walk',Digit3:'fly'};
+  if(views[event.code]){event.preventDefault();setCityView(views[event.code]);return true;}
+  if(event.code==='KeyE'){event.preventDefault();inspectCityTarget(true);return true;}
+  if(c.view!=='heli'&&MOVE_KEYS.has(event.code)){event.preventDefault();cancelCameraAnimation();heldKeys.add(event.code);dirty=true;return true;}
+  return false;
+}
+document.addEventListener('keyup',event=>heldKeys.delete(event.code));
+window.addEventListener('blur',()=>heldKeys.clear());
+document.addEventListener('mousemove',event=>{if(document.pointerLockElement===glCanvas&&renderer.mode==='city')lookCity(event.movementX,event.movementY);});
+document.addEventListener('pointerlockchange',()=>{if(!document.pointerLockElement)heldKeys.clear();updateCityHud();});
+
+function inspectCityTarget(openPanel){
+  if(!cityTargetEntry)return;
+  selectFile(cityTargetEntry.file);
+  if(openPanel){switchTab('inspector');if(document.pointerLockElement)document.exitPointerLock();}
+}
+
+function updateCityHud(){
+  const inCity=renderer.mode==='city'&&!!cityModel,view=renderer.city.view;
+  $('#cityHud').hidden=!inCity;$('#minimap').hidden=!inCity;$('#cityAddress').hidden=!inCity;
+  $('#crosshair').hidden=!inCity||view==='heli';
+  if(!inCity||view==='heli'){$('#cityTarget').hidden=true;cityTargetEntry=null;}
+  $$('[data-city-view]').forEach(button=>button.classList.toggle('active',button.dataset.cityView===view));
+  $('#cityHelp').innerHTML=CITY_HELP[view];
+  if(!inCity&&document.pointerLockElement)document.exitPointerLock();
+}
+$$('[data-city-view]').forEach(button=>button.addEventListener('click',()=>{button.blur();setCityView(button.dataset.cityView);}));
+
+// Crosshair target, street address and minimap, refreshed with each city frame.
+function updateCityReadouts(){
+  const c=renderer.city,{eye,forward}=renderer.cityPose();
+  if(c.view!=='heli'){
+    const hit=pickRay(eye,forward,cityEntries,90),entry=hit?.entry||null;
+    if(entry!==cityTargetEntry){
+      cityTargetEntry=entry;const target=$('#cityTarget');target.hidden=!entry;
+      if(entry)target.innerHTML=`${escapeHtml(entry.file.name)}<kbd>E</kbd><small>${escapeHtml(entry.file.path)} · ${format(entry.file.lines)} lines</small>`;
+    }
+  }
+  const [px,py]=c.view==='heli'?[c.x,c.y]:[c.ex,c.ey],block=blockAt(cityModel.blocks,px,py);
+  const address=[currentName,...(block?.node.path.split('/')||[])].join(' / ');
+  if(address!==lastAddress){lastAddress=address;$('#cityAddress').textContent=address;}
+  drawMinimap();
+}
+
+const MINIMAP={width:220,height:150,pad:8};
+function minimapTransform(){
+  const scale=Math.min((MINIMAP.width-MINIMAP.pad*2)/cityModel.width,(MINIMAP.height-MINIMAP.pad*2)/cityModel.height);
+  return {scale,ox:(MINIMAP.width-cityModel.width*scale)/2,oy:(MINIMAP.height-cityModel.height*scale)/2};
+}
+function buildMinimap(){
+  const dpr=2,canvas=document.createElement('canvas');canvas.width=MINIMAP.width*dpr;canvas.height=MINIMAP.height*dpr;
+  const ctx=canvas.getContext('2d'),{scale,ox,oy}=minimapTransform();ctx.scale(dpr,dpr);
+  ctx.fillStyle='rgba(141,125,255,.08)';
+  for(const block of cityModel.blocks)if(block.depth===1)ctx.fillRect(ox+block.x*scale,oy+block.y*scale,block.w*scale,block.h*scale);
+  for(const item of layoutItems){const b=item.city;if(!b)continue;ctx.fillStyle=`rgba(${item.color.map(v=>Math.round(v*255)).join(',')},.85)`;ctx.fillRect(ox+b.x*scale,oy+b.y*scale,Math.max(.6,b.w*scale),Math.max(.6,b.h*scale));}
+  minimapBase=canvas;
+}
+function drawMinimap(){
+  const canvas=$('#minimap');if(canvas.hidden||!minimapBase)return;
+  const dpr=2;if(canvas.width!==MINIMAP.width*dpr){canvas.width=MINIMAP.width*dpr;canvas.height=MINIMAP.height*dpr;}
+  const ctx=canvas.getContext('2d'),c=renderer.city,{scale,ox,oy}=minimapTransform();
+  ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,canvas.width,canvas.height);ctx.drawImage(minimapBase,0,0);ctx.setTransform(dpr,0,0,dpr,0,0);
+  const heli=c.view==='heli',x=ox+(heli?c.x:c.ex)*scale,y=oy+(heli?c.y:c.ey)*scale,yaw=heli?c.yaw:c.lookYaw;
+  if(selected?.id){const b=layoutById.get(selected.id)?.city;if(b){ctx.strokeStyle='#fff08a';ctx.lineWidth=1.5;ctx.strokeRect(ox+b.x*scale-1.5,oy+b.y*scale-1.5,b.w*scale+3,b.h*scale+3);}}
+  // Heading arrow: yaw 0 points north (up the map).
+  ctx.save();ctx.translate(x,y);ctx.rotate(-yaw);
+  ctx.fillStyle='rgba(54,211,194,.18)';ctx.beginPath();ctx.moveTo(0,0);ctx.arc(0,0,26,-Math.PI/2-.5,-Math.PI/2+.5);ctx.closePath();ctx.fill();
+  ctx.fillStyle='#fff';ctx.strokeStyle='#07090d';ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(0,-7);ctx.lineTo(5,5);ctx.lineTo(0,2.5);ctx.lineTo(-5,5);ctx.closePath();ctx.stroke();ctx.fill();
+  ctx.restore();
+}
+$('#minimap').addEventListener('pointerdown',event=>{
+  event.stopPropagation();if(!cityModel)return;
+  const rect=event.currentTarget.getBoundingClientRect(),{scale,ox,oy}=minimapTransform();
+  const x=(event.clientX-rect.left-ox)/scale,y=(event.clientY-rect.top-oy)/scale,c=renderer.city;
+  if(c.view==='heli')animateCameraTo({x,y},c,700);
+  else{const spot=c.view==='walk'?collide(x,y,MOVE.radius*3,cityIndex):{x,y};animateCameraTo({ex:spot.x,ey:spot.y},c,700);}
+});
 
 function fitCity(){
   if(!cityModel)return;
@@ -185,7 +327,7 @@ function pan3d(dx,dy){
 }
 
 function dragCity(dx,dy,action){
-  const c=renderer.city;if(c.view!=='heli')return;
+  const c=renderer.city;
   if(action==='pan'){const scale=c.distance*.0016,cy=Math.cos(c.yaw),sy=Math.sin(c.yaw);c.x+=(-dx*cy-dy*sy)*scale;c.y+=(dx*sy-dy*cy)*scale;}
   else{c.yaw-=dx*.007;c.pitch=Math.max(.08,Math.min(1.5,c.pitch+dy*.006));}
 }
@@ -474,6 +616,7 @@ function drawOverlay(){
 function drawCityOverlay(ctx){
   if(showCode){fillCodeOverview();uploadCodeOverview();}
   if(!cityModel)return;
+  updateCityReadouts();
   const occupied=[],w=renderer.width,h=renderer.height;let count=0;
   if(selected?.id){const b=layoutById.get(selected.id)?.city;if(b){const p=renderer.project([b.x+b.w/2,b.y+b.h/2,b.height+2]);if(p.x>=0&&p.x<=w&&p.y>=0&&p.y<=h)drawChip(ctx,selected.name,p.x,p.y-22,220,'#fff08a',occupied,true,'center');}}
   for(const block of cityModel.blocks){
@@ -606,6 +749,8 @@ function drawCodeTexture(ctx,item,rect){
 }
 
 function animate(now){
+  const frameSeconds=Math.min(.1,(now-lastFrame)/1000);
+  if(renderer.mode==='city'&&renderer.city.view!=='heli'&&!cameraAnimation&&heldKeys.size)stepCity(frameSeconds);
   if(cameraAnimation){
     const progress=Math.min(1,(now-cameraAnimation.start)/cameraAnimation.duration),eased=1-(1-progress)**4;
     for(const key of Object.keys(cameraAnimation.to))cameraAnimation.camera[key]=cameraAnimation.from[key]+(cameraAnimation.to[key]-cameraAnimation.from[key])*eased;
@@ -638,6 +783,12 @@ function pickAt(x,y){
 viewport.addEventListener('pointerdown',event=>{
   // Only drags that start on the map; pointer capture would otherwise swallow clicks on floating controls.
   if(event.button>2||event.target!==glCanvas)return;
+  if(renderer.mode==='city'&&renderer.city.view!=='heli'&&event.pointerType==='mouse'&&event.button===0&&glCanvas.requestPointerLock){
+    // Mouse-look: the first click captures the pointer, later clicks select the building in the crosshair.
+    event.preventDefault();
+    if(document.pointerLockElement===glCanvas)inspectCityTarget(false);else glCanvas.requestPointerLock();
+    return;
+  }
   const pan=renderer.mode!=='2d'&&(event.button===1||event.button===2||event.shiftKey||event.altKey||event.metaKey||event.ctrlKey);
   if(renderer.mode==='2d'&&event.button!==0)return;
   event.preventDefault();
@@ -646,11 +797,12 @@ viewport.addEventListener('pointerdown',event=>{
   viewport.setPointerCapture(event.pointerId);viewport.classList.add('dragging',pan?'panning':'orbiting');
 });
 viewport.addEventListener('pointermove',event=>{
+  if(document.pointerLockElement)return;
   const rect=viewport.getBoundingClientRect(),x=event.clientX-rect.left,y=event.clientY-rect.top;
   if(pointer.down&&event.pointerId===pointer.id){
     const dx=event.clientX-pointer.x,dy=event.clientY-pointer.y;pointer.x=event.clientX;pointer.y=event.clientY;
     if(renderer.mode==='2d'){renderer.camera.x-=dx/renderer.camera.zoom;renderer.camera.y-=dy/renderer.camera.zoom;}
-    else if(renderer.mode==='city')dragCity(dx,dy,pointer.action);
+    else if(renderer.mode==='city'){if(renderer.city.view==='heli')dragCity(dx,dy,pointer.action);else lookCity(dx,dy);}
     else if(pointer.action==='pan')pan3d(dx,dy);
     else{renderer.camera.yaw-=dx*.007;renderer.camera.pitch=Math.max(.045,Math.min(1.525,renderer.camera.pitch+dy*.006));}
     dirty=true;$('#tooltip').hidden=true;return;
@@ -668,9 +820,15 @@ viewport.addEventListener('pointercancel',finishPointer);
 viewport.addEventListener('pointerleave',()=>{$('#tooltip').hidden=true;});
 viewport.addEventListener('contextmenu',event=>{if(renderer.mode!=='2d')event.preventDefault();});
 viewport.addEventListener('wheel',event=>{event.preventDefault();cancelCameraAnimation();if(renderer.mode==='city'){dollyCity(event.deltaY*.00115);dirty=true;return;}if(renderer.mode==='3d'){dolly3d(event.deltaY*.00115);dirty=true;return;}const rect=viewport.getBoundingClientRect(),x=event.clientX-rect.left,y=event.clientY-rect.top,before=renderer.worldAt(x,y),factor=Math.exp(-event.deltaY*.0012);renderer.camera.zoom=Math.max(.25,Math.min(MAX_2D_ZOOM,renderer.camera.zoom*factor));const after=renderer.worldAt(x,y);renderer.camera.x+=before.x-after.x;renderer.camera.y+=before.y-after.y;dirty=true;},{passive:false});
-viewport.addEventListener('dblclick',event=>{const rect=viewport.getBoundingClientRect(),file=pickAt(event.clientX-rect.left,event.clientY-rect.top);if(file){selectFile(file);focusFile(file);}});
+viewport.addEventListener('dblclick',event=>{
+  const rect=viewport.getBoundingClientRect(),x=event.clientX-rect.left,y=event.clientY-rect.top,file=pickAt(x,y);
+  if(renderer.mode==='city'&&renderer.city.view!=='heli')return;
+  if(file){selectFile(file);focusFile(file);return;}
+  // Double-clicking a street from the helicopter drops you there at eye level.
+  if(renderer.mode==='city'){const {origin,dir}=renderer.ray(x,y),hit=groundHit(origin,dir);if(hit)setCityView('walk',hit);}
+});
 
-$$('[data-view]').forEach(button=>button.addEventListener('click',()=>{cancelCameraAnimation();$$('[data-view]').forEach(v=>v.classList.toggle('active',v===button));renderer.mode=button.dataset.view;if(renderer.mode==='3d')renderer.camera.zoom=1;if(renderer.mode==='city'&&!cityFitted)fitCity();$('#cameraHelp').hidden=renderer.mode!=='3d';dirty=true;}));
+$$('[data-view]').forEach(button=>button.addEventListener('click',()=>{cancelCameraAnimation();$$('[data-view]').forEach(v=>v.classList.toggle('active',v===button));renderer.mode=button.dataset.view;if(renderer.mode==='3d')renderer.camera.zoom=1;if(renderer.mode==='city'&&!cityFitted)fitCity();$('#cameraHelp').hidden=renderer.mode!=='3d';updateCityHud();dirty=true;}));
 $$('[data-metric]').forEach(button=>button.addEventListener('click',()=>{$$('[data-metric]').forEach(v=>v.classList.toggle('active',v===button));currentMetric=button.dataset.metric;computeLayout();}));
 $('#codeButton').classList.toggle('active',showCode);$('#codeButton').addEventListener('click',event=>{showCode=!showCode;event.currentTarget.classList.toggle('active',showCode);dirty=true;});
 $('#homeButton').addEventListener('click',()=>{selectFile(null);fitScene();});
@@ -705,6 +863,7 @@ document.addEventListener('keydown',event=>{
   if(event.key==='/'&&document.activeElement!==$('#searchInput')){event.preventDefault();$('#searchInput').focus();}
   if(event.key==='Escape'){$('#searchInput').blur();$('#tooltip').hidden=true;}
   if((event.metaKey||event.ctrlKey)&&event.key==='o'){event.preventDefault();$('#loadDialog').showModal();}
+  if(renderer.mode==='city'&&handleCityKey(event))return;
   if(renderer.mode!=='3d'||/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName))return;
   cancelCameraAnimation();
   const key=event.key.toLowerCase(),orbitStep=.065,panStep=22/Math.max(.8,renderer.camera.distance);
@@ -819,7 +978,7 @@ $('#dismissProgress').addEventListener('click',()=>{$('#progressCard').hidden=tr
 $('#fitButton').addEventListener('click',fitScene);
 function zoomStep(direction){cancelCameraAnimation();if(renderer.mode==='city')dollyCity(-direction*.22);else if(renderer.mode==='3d')dolly3d(-direction*.22);else renderer.camera.zoom=Math.max(.25,Math.min(MAX_2D_ZOOM,renderer.camera.zoom*Math.exp(direction*.3)));dirty=true;}
 $('#zoomInButton').addEventListener('click',()=>zoomStep(1));$('#zoomOutButton').addEventListener('click',()=>zoomStep(-1));
-$$('.canvas-controls, .breadcrumb, .progress-card, .legend, .camera-help').forEach(control=>{['pointerdown','dblclick','wheel'].forEach(type=>control.addEventListener(type,event=>event.stopPropagation()));});
+$$('.canvas-controls, .breadcrumb, .progress-card, .legend, .camera-help, .city-hud, .minimap').forEach(control=>{['pointerdown','dblclick','wheel'].forEach(type=>control.addEventListener(type,event=>event.stopPropagation()));});
 $$('[data-camera-preset]').forEach(button=>button.addEventListener('click',()=>{
   const poses={isometric:{yaw:-.35,pitch:.78},top:{yaw:0,pitch:.045},front:{yaw:0,pitch:1.35}};
   const from={...renderer.camera},to={...from,...poses[button.dataset.cameraPreset]};

@@ -208,3 +208,56 @@ export function groundHit([ox, oy, oz], [dx, dy, dz]) {
   const t = -oz / dz;
   return [ox + dx * t, oy + dy * t];
 }
+
+// ---- Sign placement. A quad is { c: centre, u: half-width axis, v: half-height axis } in metres. ----
+
+// Text lying flat, reading left to right along +x with its top toward north (-y).
+export function flatQuad(cx, cy, z, width, height) {
+  return { c: [cx, cy, z], u: [width / 2, 0, 0], v: [0, -height / 2, 0] };
+}
+
+// The four walls of a footprint: centre on the ground, outward normal, width.
+function walls(b) {
+  return [
+    { c: [b.x + b.w / 2, b.y + b.h], n: [0, 1], width: b.w },
+    { c: [b.x + b.w / 2, b.y], n: [0, -1], width: b.w },
+    { c: [b.x + b.w, b.y + b.h / 2], n: [1, 0], width: b.h },
+    { c: [b.x, b.y + b.h / 2], n: [-1, 0], width: b.h },
+  ];
+}
+
+// Vertical quad just outside a wall, reading left to right for someone facing that wall.
+function wallQuad(wall, z, width, height) {
+  const offset = .06, right = [wall.n[1], -wall.n[0]];
+  return { c: [wall.c[0] + wall.n[0] * offset, wall.c[1] + wall.n[1] * offset, z], u: [right[0] * width / 2, right[1] * width / 2, 0], v: [0, 0, height / 2] };
+}
+
+// Name signs at first-floor height on the walls that face the viewer.
+export function wallSigns(b, eye, aspect, height = .9, z = 3.2) {
+  const out = [];
+  for (const wall of walls(b)) {
+    if ((eye[0] - wall.c[0]) * wall.n[0] + (eye[1] - wall.c[1]) * wall.n[1] <= 0) continue;
+    // Long walls repeat the sign every ~24 m so one is always near someone walking past.
+    const count = Math.max(1, Math.floor(wall.width / 24)), segment = wall.width / count, along = [wall.n[1], -wall.n[0]];
+    const width = Math.min(segment * .85, aspect * height);
+    for (let i = 0; i < count; i++) {
+      const offset = (i + .5) * segment - wall.width / 2;
+      out.push(wallQuad({ ...wall, c: [wall.c[0] + along[0] * offset, wall.c[1] + along[1] * offset] }, Math.min(z, b.height * .5), width, width / aspect));
+    }
+  }
+  return out;
+}
+
+// The wall most squarely facing the viewer, covered with the file's source at the texture's aspect.
+export function facadeQuad(b, eye, aspect) {
+  let best = null, score = 0;
+  for (const wall of walls(b)) {
+    const dx = eye[0] - wall.c[0], dy = eye[1] - wall.c[1], facing = (dx * wall.n[0] + dy * wall.n[1]) / (Math.hypot(dx, dy) || 1);
+    if (facing > score) { score = facing; best = wall; }
+  }
+  if (!best) return null;
+  let width = best.width * .9, height = width / aspect;
+  const room = Math.max(1, (b.height - 1.5) * .92);
+  if (height > room) { height = room; width = height * aspect; }
+  return wallQuad(best, 1.2 + height / 2, width, height);
+}

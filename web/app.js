@@ -1,5 +1,6 @@
 import { LandscapeRenderer, KIND } from './renderer.js';
-import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, MOVE } from './city.js';
+import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, flatQuad, wallSigns, facadeQuad, heading, MOVE } from './city.js';
+import { LabelAtlas } from './labels.js';
 import { apiFetch, progressEvents } from './api.mjs';
 
 const configuredBackend=window.CODENAVIGATOR_CONFIG?.backendUrl?.trim()||'';
@@ -45,7 +46,7 @@ let searchHits=[];
 let expandedCoverageLayer=null;
 let coverageActiveIndex=-1;
 let cameraAnimation=null;
-let cityModel=null,cityEntries=[],cityIndex=null,cityFitted=false;
+let cityModel=null,cityEntries=[],cityIndex=null,cityFitted=false,cityDistricts=[];
 let currentSnapshot=null;
 let currentName='';
 let currentMetric='lines';
@@ -125,8 +126,9 @@ function computeCity(){
     instances.push({...building,color:item.color,atlas:[item.x/1000,item.y/680,item.w/1000,item.h/680],kind:KIND.building,id:item.id});
   }
   cityIndex=spatialIndex(cityEntries);
+  cityDistricts=cityModel.blocks.filter(block=>block.depth===1).map(block=>({block,top:Math.max(10,...[...cityIndex.near(block.x+block.w/2,block.y+block.h/2,Math.hypot(block.w,block.h)/2)].filter(b=>b.x>=block.x&&b.x+b.w<=block.x+block.w&&b.y>=block.y&&b.y+b.h<=block.y+block.h).map(b=>b.height))}));
   renderer.setCity(instances,{width:cityModel.width,height:cityModel.height});
-  buildMinimap();updateCityHud();
+  buildMinimap();updateCityHud();signState.key='';facadeState={entry:null,texture:null};renderer.setFacade(null);
 }
 
 // ---- City navigation: helicopter, walk and fly cameras, HUD, crosshair and minimap ----
@@ -580,7 +582,7 @@ function drawOverlay(){
   resizeOverlay();const ctx=overlayCtx,w=overlay.clientWidth,h=overlay.clientHeight;ctx.clearRect(0,0,w,h);ctx.save();ctx.font='600 11px Inter, system-ui, sans-serif';ctx.textBaseline='top';
   codeTexturesPending=false;
   codeTextureDeadline=performance.now()+5;
-  if(renderer.mode==='city'){visibleScreenItems=[];drawCityOverlay(ctx);ctx.restore();return;}
+  if(renderer.mode==='city'){visibleScreenItems=[];drawCityOverlay();ctx.restore();return;}
   const hitIds=new Set(searchHits.map(hit=>hit.entityId??hit.id)),occupied=[],visible=visibleLayout(w,h);visibleScreenItems=visible;
   let labelCount=0;
   if(showCode&&renderer.mode==='2d'){
@@ -613,16 +615,77 @@ function drawOverlay(){
   ctx.restore();
 }
 
-function drawCityOverlay(ctx){
+function drawCityOverlay(){
+  if(cityModel){updateCityReadouts();updateCitySigns();if(showCode)updateFacade();else renderer.setFacade(null);}
+  // The facade gets this frame's text budget before the background roof atlas.
   if(showCode){fillCodeOverview();uploadCodeOverview();}
-  if(!cityModel)return;
-  updateCityReadouts();
-  const occupied=[],w=renderer.width,h=renderer.height;let count=0;
-  if(selected?.id){const b=layoutById.get(selected.id)?.city;if(b){const p=renderer.project([b.x+b.w/2,b.y+b.h/2,b.height+2]);if(p.x>=0&&p.x<=w&&p.y>=0&&p.y<=h)drawChip(ctx,selected.name,p.x,p.y-22,220,'#fff08a',occupied,true,'center');}}
+}
+
+// ---- In-world text: ground names, roof plates, wall signs and the facade of the targeted file ----
+const labelAtlas=new LabelAtlas();
+let signState={key:'',at:0};
+const SIGN_LIMITS={roofs:260,walls:120,roofRadius:260,wallRadius:70};
+
+function updateCitySigns(){
+  const c=renderer.city,{eye}=renderer.cityPose(),heli=c.view==='heli';
+  const focus=heli?[c.x,c.y]:[c.ex,c.ey],radius=heli?Math.max(SIGN_LIMITS.roofRadius,c.distance*1.3):SIGN_LIMITS.roofRadius;
+  // Rebuild when the focus moves a few metres, the view or selection changes, or the atlas was reset.
+  const yaw=heli?c.yaw:c.lookYaw;
+  const key=[Math.round(focus[0]/6),Math.round(focus[1]/6),Math.round(radius/40),c.view,selected?.id||0,labelAtlas.generation,Math.round(eye[2]/20),Math.round(yaw*10)].join();
+  if(key===signState.key)return;
+  signState.key=key;
+  const signs={quads:[],full:false};
+  buildSignQuads(signs,focus,radius,eye,heli,yaw);
+  if(signs.full){
+    // Start a fresh atlas holding only what is needed here; anything that still does not fit is skipped.
+    labelAtlas.clear();signs.quads=[];signs.full=false;buildSignQuads(signs,focus,radius,eye,heli,yaw);
+    signState.key=[...key.split(',').slice(0,5),labelAtlas.generation,...key.split(',').slice(6)].join();
+  }
+  renderer.setSigns(signs.quads,labelAtlas);
+}
+
+// Nearest labels first, so if the atlas fills up only the most distant ones are lost.
+function buildSignQuads(signs,focus,radius,eye,heli,yaw){
+  const label=(text,style)=>{if(signs.full)return null;const entry=labelAtlas.get(text,style);if(!entry)signs.full=true;return entry;};
+  const add=(quad,uv)=>signs.quads.push({...quad,uv}),right=heading(yaw).right;
+  // District names float above their tallest tower, turned toward the camera like skyline signs.
+  for(const district of cityDistricts){
+    const entry=label(district.block.node.name,'plate');if(!entry)continue;
+    const b=district.block,width=Math.min(Math.max(b.w,b.h)*.5,Math.max(40,district.top*1.2)),height=width/entry.aspect;
+    add({c:[b.x+b.w/2,b.y+b.h/2,district.top+height/2+8],u:[right[0]*width/2,right[1]*width/2,0],v:[0,0,height/2]},entry);
+  }
+  const near=[...cityIndex.near(focus[0],focus[1],radius)].map(b=>({b,d:Math.hypot(b.x+b.w/2-focus[0],b.y+b.h/2-focus[1])})).filter(n=>n.d<=radius).sort((a,b)=>a.d-b.d);
+  const selectedCity=selected?.id?layoutById.get(selected.id)?.city:null;
+  if(selectedCity&&!near.some(n=>n.b===selectedCity))near.unshift({b:selectedCity,d:0});
+  let roofs=0,walls=0;
+  for(const {b,d} of near){
+    const isSelected=b===selectedCity;
+    if(roofs>=SIGN_LIMITS.roofs&&!isSelected&&(heli||d>=SIGN_LIMITS.wallRadius))break;
+    const entry=label(b.file.name,isSelected?'selected':'plate');if(!entry)break;
+    const height=Math.max(1.2,Math.min(Math.min(b.w,b.h)*.22,heli?12:5)),width=Math.min(b.w*.92,height*entry.aspect);
+    add(flatQuad(b.x+b.w/2,b.y+b.h/2,b.height+.08,width,width/entry.aspect),entry);roofs++;
+    if(!heli&&d<SIGN_LIMITS.wallRadius&&walls<SIGN_LIMITS.walls){for(const quad of wallSigns(b,eye,entry.aspect))add(quad,entry);walls++;}
+  }
+  // Street names on the northern kerb of nearby blocks.
   for(const block of cityModel.blocks){
-    if(block.depth!==1||count>=40)continue;
-    const p=renderer.project([block.x+block.w/2,block.y+block.h/2,0]);if(!(p.x>=0&&p.x<=w&&p.y>=0&&p.y<=h))continue;
-    if(drawChip(ctx,`${block.node.name}/`,p.x,p.y-8,180,'#8d7dff',occupied,false,'center'))count++;
+    if(block.depth<2||block.depth>3||Math.hypot(block.x+block.w/2-focus[0],block.y+block.h/2-focus[1])>radius)continue;
+    const entry=label(block.node.name,'ground');if(!entry)break;
+    const height=Math.min(block.depth===2?2.2:1.4,block.h*.12),width=Math.min(block.w*.7,height*entry.aspect);
+    add(flatQuad(block.x+block.w/2,block.y+height*.8,.4,width,width/entry.aspect),entry);
+  }
+}
+
+// Source code on the wall of the building in the crosshair, once you are close enough to read it.
+let facadeState={entry:null,texture:null};
+function updateFacade(){
+  const c=renderer.city,entry=c.view!=='heli'?cityTargetEntry:null;
+  const eye=[c.ex,c.ey,c.ez],close=entry&&Math.hypot(entry.x+entry.w/2-eye[0],entry.y+entry.h/2-eye[1])<Math.max(45,Math.max(entry.w,entry.h));
+  if(!close){if(facadeState.entry){facadeState={entry:null,texture:null};renderer.setFacade(null);}return;}
+  const item=entry.file,texture=buildCodeTexture(item,{x:0,y:0,w:1024,h:1024*item.h/Math.max(.001,item.w)});
+  if(!texture)return;
+  const quad=facadeQuad(entry,eye,texture.width/texture.height);
+  if(entry!==facadeState.entry||texture!==facadeState.texture||facadeState.quadKey!==JSON.stringify(quad?.c)){
+    facadeState={entry,texture,quadKey:JSON.stringify(quad?.c)};renderer.setFacade(texture,quad);
   }
 }
 

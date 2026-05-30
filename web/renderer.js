@@ -123,6 +123,34 @@ precision highp float;
 out vec4 outColor;
 void main(){ outColor = vec4(.59, .63, 1.0, .11); }`;
 
+// Textured quads for city signs and facades: centre, half-width axis, half-height axis, atlas rect.
+const SIGN_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 aCorner;
+layout(location=1) in vec3 aCenter;
+layout(location=2) in vec3 aAxisU;
+layout(location=3) in vec3 aAxisV;
+layout(location=4) in vec4 aUv;
+uniform mat4 uViewProj;
+out vec2 vUv;
+void main(){
+  vec3 world = aCenter + aAxisU * (aCorner.x * 2.0 - 1.0) + aAxisV * (aCorner.y * 2.0 - 1.0);
+  vUv = aUv.xy + vec2(aCorner.x, 1.0 - aCorner.y) * aUv.zw;
+  gl_Position = uViewProj * vec4(world, 1.0);
+}`;
+
+const SIGN_FS = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uTexture;
+out vec4 outColor;
+void main(){
+  vec4 color = texture(uTexture, vUv);
+  if(color.a < .02) discard;
+  outColor = color;
+}`;
+const SIGN_FLOATS = 13;
+
 function program(gl, vertex, fragment) {
   const value = gl.createProgram();
   gl.attachShader(value, shader(gl, gl.VERTEX_SHADER, vertex));
@@ -163,6 +191,10 @@ export class LandscapeRenderer {
     this.anisotropy = gl.getExtension('EXT_texture_filter_anisotropic');
     this.cube = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, this.cube); gl.bufferData(gl.ARRAY_BUFFER, VERTICES, gl.STATIC_DRAW);
     this.landscape = this.boxLayer(); this.cityLayer = this.boxLayer();
+    this.signProgram = program(gl, SIGN_VS, SIGN_FS); this.signUniforms = uniformsOf(gl, this.signProgram);
+    this.corners = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, this.corners); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
+    this.signLayer = this.quadLayer(); this.facadeLayer = this.quadLayer();
+    this.atlasTexture = this.texture(); this.facadeTexture = this.texture(); this.atlasGeneration = -1;
     this.camera = { x: 500, y: 350, zoom: 1, yaw: -.1, pitch: .78, distance: 3.5 };
     // City camera: 'heli' orbits a ground target; 'walk' and 'fly' look out from an eye position.
     this.city = { view: 'heli', x: 0, y: 0, yaw: -.12, pitch: .8, distance: 500, ex: 0, ey: 0, ez: EYE_HEIGHT, lookYaw: 0, lookPitch: 0 };
@@ -179,6 +211,78 @@ export class LandscapeRenderer {
       gl.enableVertexAttribArray(i + 1); gl.vertexAttribPointer(i + 1, 4, gl.FLOAT, false, FLOATS_PER_INSTANCE * 4, i * 16); gl.vertexAttribDivisor(i + 1, 1);
     }
     return layer;
+  }
+
+  quadLayer() {
+    const gl = this.gl, layer = { vao: gl.createVertexArray(), buffer: gl.createBuffer(), count: 0 };
+    gl.bindVertexArray(layer.vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.corners); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, layer.buffer);
+    [[1, 3, 0], [2, 3, 12], [3, 3, 24], [4, 4, 36]].forEach(([index, size, offset]) => {
+      gl.enableVertexAttribArray(index); gl.vertexAttribPointer(index, size, gl.FLOAT, false, SIGN_FLOATS * 4, offset); gl.vertexAttribDivisor(index, 1);
+    });
+    return layer;
+  }
+
+  texture() {
+    const gl = this.gl, texture = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    return texture;
+  }
+
+  // quads: [{ c, u, v, uv: {u, v, du, dv} }] from city.js placement helpers.
+  static packQuads(quads) {
+    const packed = new Float32Array(quads.length * SIGN_FLOATS);
+    quads.forEach((q, i) => packed.set([...q.c, ...q.u, ...q.v, q.uv.u, q.uv.v, q.uv.du, q.uv.dv], i * SIGN_FLOATS));
+    return packed;
+  }
+
+  setSigns(quads, atlas) {
+    this.atlas = atlas;
+    const gl = this.gl, packed = LandscapeRenderer.packQuads(quads);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.signLayer.buffer); gl.bufferData(gl.ARRAY_BUFFER, packed, gl.DYNAMIC_DRAW);
+    this.signLayer.count = quads.length;
+  }
+
+  // Source code on one wall: a canvas and its quad, or null to hide.
+  setFacade(canvas, quad) {
+    const gl = this.gl;
+    if (!canvas || !quad) { this.facadeLayer.count = 0; return; }
+    if (canvas !== this.facadeSource) {
+      gl.bindTexture(gl.TEXTURE_2D, this.facadeTexture); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas); gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      this.facadeSource = canvas;
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.facadeLayer.buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, LandscapeRenderer.packQuads([{ ...quad, uv: { u: 0, v: 0, du: 1, dv: 1 } }]), gl.DYNAMIC_DRAW);
+    this.facadeLayer.count = 1;
+  }
+
+  syncAtlas() {
+    const gl = this.gl, atlas = this.atlas; if (!atlas) return;
+    gl.bindTexture(gl.TEXTURE_2D, this.atlasTexture); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+    if (this.atlasGeneration === -1) { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, atlas.canvas); this.atlasGeneration = 0; atlas.takeDirty(); this.mipmapAtlas(); return; }
+    const dirty = atlas.takeDirty();
+    if (dirty) { gl.texSubImage2D(gl.TEXTURE_2D, 0, dirty.x, dirty.y, gl.RGBA, gl.UNSIGNED_BYTE, dirty.image); this.mipmapAtlas(); }
+  }
+
+  // Signs are mostly seen small and at grazing angles; without mipmaps the text shimmers.
+  mipmapAtlas() {
+    const gl = this.gl;
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    if (this.anisotropy) gl.texParameterf(gl.TEXTURE_2D, this.anisotropy.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, gl.getParameter(this.anisotropy.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
+  }
+
+  drawQuads(layer, texture) {
+    if (!layer.count) return;
+    const gl = this.gl, u = this.signUniforms;
+    gl.useProgram(this.signProgram); gl.bindVertexArray(layer.vao);
+    gl.uniformMatrix4fv(u.uViewProj, false, this.viewProj);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texture); gl.uniform1i(u.uTexture, 0);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, layer.count);
   }
 
   upload(layer, packed) {
@@ -288,6 +392,15 @@ export class LandscapeRenderer {
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.codeTexture); gl.uniform1i(u.uCode, 0);
     gl.uniform1f(u.uCodeOn, this.codeOn && this.mode !== '2d' ? 1 : 0);
     gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, layer.count);
+    if (this.mode === 'city') {
+      // Signs sit on or just off surfaces: test depth, don't write it, and pull them forward a touch.
+      this.syncAtlas();
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false);
+      gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-2, -8);
+      this.drawQuads(this.facadeLayer, this.facadeTexture);
+      this.drawQuads(this.signLayer, this.atlasTexture);
+      gl.disable(gl.POLYGON_OFFSET_FILL); gl.depthMask(true); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    }
   }
 
   // Geometry of an item in the active world: map units for 2D/3D, metres in the city.

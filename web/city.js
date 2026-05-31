@@ -261,3 +261,48 @@ export function facadeQuad(b, eye, aspect) {
   if (height > room) { height = room; width = height * aspect; }
   return wallQuad(best, 1.2 + height / 2, width, height);
 }
+
+// ---- Guided tour, shareable places and touch input ----
+
+// Largest districts first, each with a helicopter pose that frames it.
+export function tourStops(districts, limit = 6) {
+  return [...districts].sort((a, b) => b.lines - a.lines).slice(0, limit).map((district, index) => {
+    const b = district.block;
+    return { district, pose: { x: b.x + b.w / 2, y: b.y + b.h / 2, distance: Math.max(120, Math.max(b.w, b.h) * 1.35), pitch: .5, yaw: -.6 + index * 1.1 } };
+  });
+}
+
+const CAMERA_FIELDS = { heli: ['x', 'y', 'yaw', 'pitch', 'distance'], walk: ['ex', 'ey', 'ez', 'lookYaw', 'lookPitch'], fly: ['ex', 'ey', 'ez', 'lookYaw', 'lookPitch'] };
+const GITHUB_REPO = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+$/;
+
+// A place in a codebase as a URL fragment: repository, view, city camera and selected file.
+export function encodePlace({ repo, view, camera, file }) {
+  const params = new URLSearchParams({ repo, view });
+  if (view === 'city' && camera && CAMERA_FIELDS[camera.view]) {
+    params.set('cam', `${camera.view}:${CAMERA_FIELDS[camera.view].map(key => +camera[key].toFixed(key.startsWith('e') || key === 'x' || key === 'y' || key === 'distance' ? 1 : 3)).join(',')}`);
+  }
+  if (file) params.set('file', file);
+  return `#${params}`;
+}
+
+export function decodePlace(hash) {
+  const params = new URLSearchParams(String(hash || '').replace(/^#/, ''));
+  const repo = params.get('repo');
+  if (!repo || !GITHUB_REPO.test(repo)) return null;
+  const view = ['2d', '3d', 'city'].includes(params.get('view')) ? params.get('view') : '2d';
+  const place = { repo, view, file: params.get('file') || null, camera: null };
+  const [camView, values] = (params.get('cam') || '').split(':');
+  const numbers = (values || '').split(',').map(Number);
+  if (CAMERA_FIELDS[camView] && numbers.length === CAMERA_FIELDS[camView].length && numbers.every(Number.isFinite)) {
+    place.camera = { view: camView, ...Object.fromEntries(CAMERA_FIELDS[camView].map((key, i) => [key, numbers[i]])) };
+  }
+  return place;
+}
+
+// Virtual joystick: drag offset in pixels to forward/right in -1..1, with a small dead zone.
+export function joystick(dx, dy, radius = 56) {
+  const length = Math.hypot(dx, dy);
+  if (length < radius * .12) return { forward: 0, right: 0 };
+  const scale = Math.min(1, length / radius) / length;
+  return { forward: -dy * scale, right: dx * scale };
+}

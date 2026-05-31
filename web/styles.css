@@ -149,7 +149,7 @@ kbd { font: 500 10px/1.5 var(--mono); border: 1px solid var(--line-strong); bord
 #glCanvas, #overlayCanvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 #overlayCanvas { pointer-events: none; }
 
-.breadcrumb, .canvas-controls, .camera-help, .legend, .tooltip, .progress-card, .city-hud, .city-target, .city-address, .minimap {
+.breadcrumb, .canvas-controls, .camera-help, .legend, .tooltip, .progress-card, .city-hud, .city-target, .city-address, .minimap, .tour-caption {
   border: 1px solid var(--line);
   background: var(--surface);
   -webkit-backdrop-filter: var(--glass);
@@ -282,6 +282,16 @@ kbd { font: 500 10px/1.5 var(--mono); border: 1px solid var(--line-strong); bord
 .city-views button.active { color: #fff; border-color: var(--accent-line); background: var(--accent-soft); }
 .city-views kbd { padding: 0 4px; font-size: 9px; }
 .city-help b { color: var(--muted); font-weight: 600; }
+.city-actions { display: flex; gap: 2px; padding-left: 8px; border-left: 1px solid var(--line); }
+.city-actions button { padding: 5px 10px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 500; cursor: pointer; white-space: nowrap; }
+.city-actions button:hover { color: #fff; background: var(--hover); }
+.city-actions button.active { color: #fff; border-color: var(--accent-line); background: var(--accent-soft); }
+.tour-caption { position: absolute; z-index: 2; left: 50%; bottom: 84px; transform: translateX(-50%); display: grid; justify-items: center; gap: 2px; padding: 12px 22px; border-radius: 16px; text-align: center; pointer-events: none; animation: rise .3s ease-out; }
+.tour-caption small { color: var(--accent-2); font: 600 10px var(--mono); letter-spacing: .12em; }
+.tour-caption strong { color: #fff; font-size: 22px; font-weight: 700; letter-spacing: -.03em; }
+.tour-caption span { color: var(--muted); font-size: 11.5px; }
+.joystick { position: absolute; z-index: 3; width: 112px; height: 112px; margin: -56px 0 0 -56px; border: 1px solid var(--line-strong); border-radius: 50%; background: rgba(16,19,27,.45); pointer-events: none; }
+.joystick i { position: absolute; left: 36px; top: 36px; width: 40px; height: 40px; border-radius: 50%; background: var(--accent-grad); box-shadow: 0 0 16px rgba(95,157,255,.6); }
 .crosshair { position: absolute; z-index: 2; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; pointer-events: none; }
 .crosshair::before, .crosshair::after { content: ""; position: absolute; background: rgba(255,255,255,.85); box-shadow: 0 0 6px rgba(0,0,0,.8); }
 .crosshair::before { left: 8px; top: 0; width: 2px; height: 18px; }
@@ -405,6 +415,9 @@ html[data-input-method="pointer"] button:focus { outline: none; }
   .welcome { padding: 20px; }
   .welcome-features { display: none; }
   .camera-help { left: 10px; top: 10px; gap: 8px; font-size: 9.5px; }
+  .city-hud { left: 10px; top: 10px; gap: 6px; }
+  .city-help, .minimap { display: none; }
+  .city-address { left: 10px; top: 58px; }
   .breadcrumb { left: 10px; bottom: 10px; }
   .canvas-controls { right: 10px; bottom: 10px; }
 }

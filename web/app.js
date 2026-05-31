@@ -1,5 +1,5 @@
 import { LandscapeRenderer, KIND } from './renderer.js';
-import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, flatQuad, wallSigns, facadeQuad, heading, MOVE } from './city.js';
+import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, flatQuad, wallSigns, facadeQuad, heading, tourStops, encodePlace, decodePlace, joystick, MOVE } from './city.js';
 import { LabelAtlas } from './labels.js';
 import { apiFetch, progressEvents } from './api.mjs';
 
@@ -128,7 +128,8 @@ function computeCity(){
     instances.push({...building,color:item.color,atlas:[item.x/1000,item.y/680,item.w/1000,item.h/680],kind:KIND.building,id:item.id,lit:Math.min(.85,.06+Math.sqrt(symbols)/9)});
   }
   cityIndex=spatialIndex(cityEntries);
-  cityDistricts=cityModel.blocks.filter(block=>block.depth===1).map(block=>({block,top:Math.max(10,...[...cityIndex.near(block.x+block.w/2,block.y+block.h/2,Math.hypot(block.w,block.h)/2)].filter(b=>b.x>=block.x&&b.x+b.w<=block.x+block.w&&b.y>=block.y&&b.y+b.h<=block.y+block.h).map(b=>b.height))}));
+  const tally=node=>{let files=node.files.length,lines=node.files.reduce((n,f)=>n+(f.lines||0),0);for(const child of node.children.values()){const t=tally(child);files+=t.files;lines+=t.lines;}return{files,lines};};
+  cityDistricts=cityModel.blocks.filter(block=>block.depth===1).map(block=>({block,...tally(block.node),top:Math.max(10,...[...cityIndex.near(block.x+block.w/2,block.y+block.h/2,Math.hypot(block.w,block.h)/2)].filter(b=>b.x>=block.x&&b.x+b.w<=block.x+block.w&&b.y>=block.y&&b.y+b.h<=block.y+block.h).map(b=>b.height))}));
   renderer.setCity(instances,{width:cityModel.width,height:cityModel.height});
   buildMinimap();updateCityHud();updateTrails();updateBeacons();signState.key='';facadeState={entry:null,texture:null};renderer.setFacade(null);
 }
@@ -136,7 +137,12 @@ function computeCity(){
 // ---- City navigation: helicopter, walk and fly cameras, HUD, crosshair and minimap ----
 const heldKeys=new Set(),MOVE_KEYS=new Set(['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight','Space','KeyC']);
 let minimapBase=null,cityTargetEntry=null,lastAddress='';
-const CITY_HELP={
+const COARSE=matchMedia('(pointer: coarse)').matches;
+const CITY_HELP=COARSE?{
+  heli:'<b>Drag</b> orbit · <b>Pinch</b> zoom · <b>Double-tap</b> a street to walk',
+  walk:'<b>Left thumb</b> move · <b>Right thumb</b> look · <b>Tap</b> a building to inspect',
+  fly:'<b>Left thumb</b> fly · <b>Right thumb</b> look · <b>Pinch</b> climb',
+}:{
   heli:'<b>Drag</b> orbit · <b>Shift+drag</b> pan · <b>Scroll</b> zoom · <b>Double-click</b> a street to walk',
   walk:'<b>Click</b> to look · <b>WASD</b> move · <b>Shift</b> run · <b>E</b> inspect · <b>Esc</b> release mouse',
   fly:'<b>Click</b> to look · <b>WASD</b> fly · <b>Space</b>/<b>C</b> up/down · <b>Shift</b> fast · <b>E</b> inspect',
@@ -180,8 +186,8 @@ function openHeading(x,y,current){
 function stepCity(seconds){
   const down=code=>heldKeys.has(code)?1:0;
   stepCamera(renderer.city,{
-    forward:down('KeyW')+down('ArrowUp')-down('KeyS')-down('ArrowDown'),
-    right:down('KeyD')+down('ArrowRight')-down('KeyA')-down('ArrowLeft'),
+    forward:Math.max(-1,Math.min(1,down('KeyW')+down('ArrowUp')-down('KeyS')-down('ArrowDown')+touchMove.forward)),
+    right:Math.max(-1,Math.min(1,down('KeyD')+down('ArrowRight')-down('KeyA')-down('ArrowLeft')+touchMove.right)),
     up:down('Space')-down('KeyC'),
     run:heldKeys.has('ShiftLeft')||heldKeys.has('ShiftRight'),
   },seconds,cityIndex,cityModel);
@@ -195,6 +201,8 @@ function lookCity(dx,dy){
 
 function handleCityKey(event){
   const c=renderer.city;
+  if(event.code==='KeyT'){event.preventDefault();tour?endTour():startTour();return true;}
+  if(tour)endTour();
   if(/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName))return false;
   const views={Digit1:'heli',Digit2:'walk',Digit3:'fly'};
   if(views[event.code]){event.preventDefault();setCityView(views[event.code]);return true;}
@@ -222,7 +230,106 @@ function updateCityHud(){
   $('#cityHelp').innerHTML=CITY_HELP[view];
   if(!inCity&&document.pointerLockElement)document.exitPointerLock();
 }
-$$('[data-city-view]').forEach(button=>button.addEventListener('click',()=>{button.blur();setCityView(button.dataset.cityView);}));
+$$('[data-city-view]').forEach(button=>button.addEventListener('click',()=>{button.blur();endTour();setCityView(button.dataset.cityView);}));
+
+// ---- Touch: left-thumb joystick while walking or flying, drag to look, pinch to zoom ----
+const touches=new Map();let joy=null,pinch=null,touchMove={forward:0,right:0};
+function startTouch(event){
+  touches.set(event.pointerId,{x:event.clientX,y:event.clientY});
+  if(touches.size===2){
+    pointer.down=false;endJoystick();
+    const [a,b]=[...touches.values()];pinch={distance:Math.hypot(a.x-b.x,a.y-b.y)};
+    viewport.setPointerCapture(event.pointerId);event.preventDefault();return true;
+  }
+  const rect=viewport.getBoundingClientRect(),x=event.clientX-rect.left,y=event.clientY-rect.top;
+  if(renderer.mode==='city'&&renderer.city.view!=='heli'&&x<rect.width/2){
+    joy={id:event.pointerId,x0:event.clientX,y0:event.clientY};
+    const stick=$('#joystick');stick.hidden=false;stick.style.left=`${x}px`;stick.style.top=`${y}px`;stick.firstElementChild.style.transform='';
+    viewport.setPointerCapture(event.pointerId);event.preventDefault();return true;
+  }
+  return false;
+}
+function moveTouch(event){
+  if(!touches.has(event.pointerId))return false;
+  touches.set(event.pointerId,{x:event.clientX,y:event.clientY});
+  if(pinch&&touches.size>=2){
+    const [a,b]=[...touches.values()],distance=Math.hypot(a.x-b.x,a.y-b.y),ratio=distance/Math.max(1,pinch.distance);pinch.distance=distance;
+    const amount=-Math.log(ratio||1),c=renderer.city;
+    if(renderer.mode==='city'){if(c.view==='heli')dollyCity(amount);else if(c.view==='fly')c.ez=Math.max(MOVE.eyeHeight,Math.min(3000,c.ez-amount*120));}
+    else if(renderer.mode==='3d')dolly3d(amount);
+    else renderer.camera.zoom=Math.max(.25,Math.min(MAX_2D_ZOOM,renderer.camera.zoom*ratio));
+    dirty=true;return true;
+  }
+  if(joy&&event.pointerId===joy.id){
+    const dx=event.clientX-joy.x0,dy=event.clientY-joy.y0,length=Math.min(56,Math.hypot(dx,dy)),angle=Math.atan2(dy,dx);
+    touchMove=joystick(dx,dy);
+    $('#joystick').firstElementChild.style.transform=`translate(${Math.cos(angle)*length}px,${Math.sin(angle)*length}px)`;
+    dirty=true;return true;
+  }
+  return false;
+}
+function endTouch(event){
+  touches.delete(event.pointerId);
+  if(joy?.id===event.pointerId)endJoystick();
+  if(touches.size<2)pinch=null;
+}
+function endJoystick(){joy=null;touchMove={forward:0,right:0};$('#joystick').hidden=true;}
+viewport.addEventListener('pointercancel',event=>{if(event.pointerType==='touch')endTouch(event);});
+
+// ---- Guided tour: a helicopter flight over the largest districts ----
+let tour=null;
+function startTour(){
+  if(!cityModel||renderer.mode!=='city')return;
+  const stops=tourStops(cityDistricts);if(!stops.length)return;
+  if(renderer.city.view!=='heli')setCityView('heli');
+  tour={stops,index:-1,dwellUntil:0};$('#tourButton').classList.add('active');nextTourStop();
+}
+function nextTourStop(){
+  tour.index++;
+  const caption=$('#tourCaption');
+  if(tour.index>=tour.stops.length){
+    const size=Math.max(cityModel.width,cityModel.height);
+    animateCameraTo({x:cityModel.width/2,y:cityModel.height/2,distance:size*1.05,pitch:.72,yaw:renderer.city.yaw+.6},renderer.city,3000);
+    endTour();return;
+  }
+  const {district,pose}=tour.stops[tour.index];
+  animateCameraTo({...pose,yaw:renderer.city.yaw+((pose.yaw-renderer.city.yaw)%(Math.PI*2))},renderer.city,2600);
+  tour.dwellUntil=performance.now()+2600+3400;
+  caption.hidden=false;
+  caption.innerHTML=`<small>${tour.index+1} / ${tour.stops.length}</small><strong>${escapeHtml(district.block.node.name)}</strong><span>${format(district.files)} files · ${format(district.lines)} lines</span>`;
+}
+function advanceTour(now,seconds){
+  if(!cameraAnimation&&now<tour.dwellUntil){renderer.city.yaw+=seconds*.1;dirty=true;}
+  else if(now>=tour.dwellUntil)nextTourStop();
+}
+function endTour(){if(!tour)return;tour=null;$('#tourCaption').hidden=true;$('#tourButton').classList.remove('active');}
+$('#tourButton').addEventListener('click',event=>{event.currentTarget.blur();tour?endTour():startTour();});
+
+// ---- Shareable places: repository, view, camera and file in the URL fragment ----
+let currentRepoUrl='';
+$('#shareButton').addEventListener('click',async event=>{
+  const button=event.currentTarget,label=button.textContent;button.blur();
+  const flash=text=>{button.textContent=text;setTimeout(()=>{button.textContent=label;},1800);};
+  if(!currentRepoUrl){flash('Needs a GitHub repo');return;}
+  const hash=encodePlace({repo:currentRepoUrl,view:renderer.mode,camera:renderer.city,file:selected?.path});
+  window.history.replaceState(null,'',hash);
+  try{await navigator.clipboard.writeText(location.href);flash('Link copied');}catch{flash('Link in address bar');}
+});
+function openPlaceFromHash(){
+  const place=decodePlace(location.hash);if(!place)return;
+  try{sessionStorage.setItem('codenav.pendingPlace',JSON.stringify(place));}catch{}
+  $('#githubInput').value=place.repo;startGithub();
+}
+function applyPendingPlace(){
+  let place=null;try{place=JSON.parse(sessionStorage.getItem('codenav.pendingPlace')||'null');}catch{}
+  if(!place||place.repo!==currentRepoUrl)return;
+  try{sessionStorage.removeItem('codenav.pendingPlace');}catch{}
+  $(`[data-view="${place.view}"]`)?.click();
+  const file=place.file&&files.find(candidate=>candidate.path===place.file);
+  if(file){selectFile(file);if(!place.camera)focusFile(file);}
+  if(place.camera&&place.view==='city'){cancelCameraAnimation();Object.assign(renderer.city,place.camera);updateCityHud();}
+  dirty=true;
+}
 
 // Crosshair target, street address and minimap, refreshed with each city frame.
 function updateCityReadouts(){
@@ -311,6 +418,8 @@ function applySnapshot(snapshot){
   const layers=new Map();for(const file of files){const layer=file.layer in layerLabels?file.layer:'unknown';layers.set(layer,(layers.get(layer)||0)+1);}sceneStats={definitions:snapshot.definitions??files.reduce((n,file)=>n+(file.symbolCount||0),0),totalLines:snapshot.totalLines??files.reduce((n,file)=>n+file.lines,0),known,inferred,layers};
   computeLayout();fitScene();fitCity();updateStats(snapshot);renderInspector();renderResults([]);renderHistory();
   $('#breadcrumbText').textContent=currentName;$('#emptyState').hidden=files.length>0;$('#welcome').hidden=true;
+  currentRepoUrl=snapshot.source==='github'?lastGithubUrl.replace(/\/+$/,'').replace(/\.git$/,''):'';
+  endTour();applyPendingPlace();
 }
 
 function fitScene(){
@@ -839,7 +948,8 @@ function drawCodeTexture(ctx,item,rect){
 
 function animate(now){
   const frameSeconds=Math.min(.1,(now-lastFrame)/1000);
-  if(renderer.mode==='city'&&renderer.city.view!=='heli'&&!cameraAnimation&&heldKeys.size)stepCity(frameSeconds);
+  if(renderer.mode==='city'&&renderer.city.view!=='heli'&&!cameraAnimation&&(heldKeys.size||touchMove.forward||touchMove.right))stepCity(frameSeconds);
+  if(tour)advanceTour(now,frameSeconds);
   if(cameraAnimation){
     const progress=Math.min(1,(now-cameraAnimation.start)/cameraAnimation.duration),eased=1-(1-progress)**4;
     for(const key of Object.keys(cameraAnimation.to))cameraAnimation.camera[key]=cameraAnimation.from[key]+(cameraAnimation.to[key]-cameraAnimation.from[key])*eased;
@@ -879,6 +989,8 @@ viewport.addEventListener('pointerdown',event=>{
     if(document.pointerLockElement===glCanvas)inspectCityTarget(false);else glCanvas.requestPointerLock();
     return;
   }
+  if(tour)endTour();
+  if(event.pointerType==='touch'&&startTouch(event))return;
   const pan=renderer.mode!=='2d'&&(event.button===1||event.button===2||event.shiftKey||event.altKey||event.metaKey||event.ctrlKey);
   if(renderer.mode==='2d'&&event.button!==0)return;
   event.preventDefault();
@@ -888,6 +1000,7 @@ viewport.addEventListener('pointerdown',event=>{
 });
 viewport.addEventListener('pointermove',event=>{
   if(document.pointerLockElement)return;
+  if(event.pointerType==='touch'&&moveTouch(event))return;
   const rect=viewport.getBoundingClientRect(),x=event.clientX-rect.left,y=event.clientY-rect.top;
   if(pointer.down&&event.pointerId===pointer.id){
     const dx=event.clientX-pointer.x,dy=event.clientY-pointer.y;pointer.x=event.clientX;pointer.y=event.clientY;
@@ -900,6 +1013,7 @@ viewport.addEventListener('pointermove',event=>{
   const item=pickAt(x,y),tip=$('#tooltip');if(item){tip.hidden=false;tip.style.left=`${Math.min(viewport.clientWidth-320,x+13)}px`;tip.style.top=`${Math.min(viewport.clientHeight-70,y+13)}px`;tip.innerHTML=`${escapeHtml(item.name)}<small>${escapeHtml(item.path)} · ${format(item.lines)} lines</small>`;}else tip.hidden=true;
 });
 function finishPointer(event){
+  if(event.pointerType==='touch')endTouch(event);
   if(!pointer.down||event.pointerId!==pointer.id)return;
   viewport.classList.remove('dragging','panning','orbiting');
   if(event.type==='pointerup'&&event.button===0&&Math.hypot(event.clientX-pointer.startX,event.clientY-pointer.startY)<4){const rect=viewport.getBoundingClientRect();selectFile(pickAt(event.clientX-rect.left,event.clientY-rect.top));}
@@ -909,7 +1023,7 @@ viewport.addEventListener('pointerup',finishPointer);
 viewport.addEventListener('pointercancel',finishPointer);
 viewport.addEventListener('pointerleave',()=>{$('#tooltip').hidden=true;});
 viewport.addEventListener('contextmenu',event=>{if(renderer.mode!=='2d')event.preventDefault();});
-viewport.addEventListener('wheel',event=>{event.preventDefault();cancelCameraAnimation();if(renderer.mode==='city'){dollyCity(event.deltaY*.00115);dirty=true;return;}if(renderer.mode==='3d'){dolly3d(event.deltaY*.00115);dirty=true;return;}const rect=viewport.getBoundingClientRect(),x=event.clientX-rect.left,y=event.clientY-rect.top,before=renderer.worldAt(x,y),factor=Math.exp(-event.deltaY*.0012);renderer.camera.zoom=Math.max(.25,Math.min(MAX_2D_ZOOM,renderer.camera.zoom*factor));const after=renderer.worldAt(x,y);renderer.camera.x+=before.x-after.x;renderer.camera.y+=before.y-after.y;dirty=true;},{passive:false});
+viewport.addEventListener('wheel',event=>{event.preventDefault();cancelCameraAnimation();if(tour)endTour();if(renderer.mode==='city'){dollyCity(event.deltaY*.00115);dirty=true;return;}if(renderer.mode==='3d'){dolly3d(event.deltaY*.00115);dirty=true;return;}const rect=viewport.getBoundingClientRect(),x=event.clientX-rect.left,y=event.clientY-rect.top,before=renderer.worldAt(x,y),factor=Math.exp(-event.deltaY*.0012);renderer.camera.zoom=Math.max(.25,Math.min(MAX_2D_ZOOM,renderer.camera.zoom*factor));const after=renderer.worldAt(x,y);renderer.camera.x+=before.x-after.x;renderer.camera.y+=before.y-after.y;dirty=true;},{passive:false});
 viewport.addEventListener('dblclick',event=>{
   const rect=viewport.getBoundingClientRect(),x=event.clientX-rect.left,y=event.clientY-rect.top,file=pickAt(x,y);
   if(renderer.mode==='city'&&renderer.city.view!=='heli')return;
@@ -1083,4 +1197,4 @@ switchTab('inspector');
 new ResizeObserver(()=>{dirty=true;}).observe(viewport);
 $('#settingsButton').title='Workspace settings';$('#settingsButton').setAttribute('aria-label','Workspace settings');
 $('#settingsButton svg').innerHTML='<circle cx="12" cy="12" r="3"/><path d="m9.5 3-.5 2-2 1-2-.5L3 9l1.5 1.5v3L3 15l2 3.5 2-.5 2 1 .5 2h5l.5-2 2-1 2 .5 2-3.5-1.5-1.5v-3L21 9l-2-3.5-2 .5-2-1-.5-2z"/>';
-renderer.setData([]);fitScene();renderInspector();renderHistory();requestAnimationFrame(animate);checkBackend();loadGithubStatus().then(resumeAfterGithub);
+renderer.setData([]);fitScene();renderInspector();renderHistory();requestAnimationFrame(animate);checkBackend();loadGithubStatus().then(()=>/[?&](github|setup_action)=/.test(location.search)?resumeAfterGithub():openPlaceFromHash());

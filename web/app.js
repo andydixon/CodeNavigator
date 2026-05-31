@@ -123,12 +123,14 @@ function computeCity(){
   for(const item of layoutItems){
     const building=cityModel.buildings.get(item.id);if(!building)continue;
     item.city={...building,file:item};cityEntries.push(item.city);
-    instances.push({...building,color:item.color,atlas:[item.x/1000,item.y/680,item.w/1000,item.h/680],kind:KIND.building,id:item.id});
+    // More definitions light more windows.
+    const symbols=item.symbolCount??item.symbols?.length??0;
+    instances.push({...building,color:item.color,atlas:[item.x/1000,item.y/680,item.w/1000,item.h/680],kind:KIND.building,id:item.id,lit:Math.min(.85,.06+Math.sqrt(symbols)/9)});
   }
   cityIndex=spatialIndex(cityEntries);
   cityDistricts=cityModel.blocks.filter(block=>block.depth===1).map(block=>({block,top:Math.max(10,...[...cityIndex.near(block.x+block.w/2,block.y+block.h/2,Math.hypot(block.w,block.h)/2)].filter(b=>b.x>=block.x&&b.x+b.w<=block.x+block.w&&b.y>=block.y&&b.y+b.h<=block.y+block.h).map(b=>b.height))}));
   renderer.setCity(instances,{width:cityModel.width,height:cityModel.height});
-  buildMinimap();updateCityHud();signState.key='';facadeState={entry:null,texture:null};renderer.setFacade(null);
+  buildMinimap();updateCityHud();updateTrails();updateBeacons();signState.key='';facadeState={entry:null,texture:null};renderer.setFacade(null);
 }
 
 // ---- City navigation: helicopter, walk and fly cameras, HUD, crosshair and minimap ----
@@ -463,7 +465,7 @@ function selectFile(file,addHistory=true){
   if(!file)coverageActiveIndex=-1;
   if(file&&addHistory){history=history.filter(item=>item.id!==file.id);history.unshift(file);history=history.slice(0,30);renderHistory();}
   $('#breadcrumbText').textContent=file?`${currentName}  ›  ${file.path}`:currentName;
-  renderer.setSelected(file?.id||0);renderInspector();if(file)loadFileDetails(file);dirty=true;
+  renderer.setSelected(file?.id||0);updateTrails();renderInspector();if(file)loadFileDetails(file);dirty=true;
 }
 
 function renderInspector(){
@@ -525,7 +527,7 @@ function mountCoverageList(layer){
 }
 
 function renderResults(hits){
-  searchHits=hits;$('#resultBadge').textContent=hits.length||'';$('#resultSummary').textContent=hits.length?`${hits.length} matching files and definitions`:'Type in the filter to search files and symbols.';
+  searchHits=hits;updateBeacons();$('#resultBadge').textContent=hits.length||'';$('#resultSummary').textContent=hits.length?`${hits.length} matching files and definitions`:'Type in the filter to search files and symbols.';
   $('#resultList').innerHTML=hits.map(hit=>`<div class="result-row" data-id="${hit.entityId??hit.id}"><i></i><span><strong>${escapeHtml(hit.name)}</strong><small>${escapeHtml(hit.path)}${hit.line?` · ${hit.line}`:''}</small></span></div>`).join('');
   $('#resultList').querySelectorAll('.result-row').forEach(row=>row.addEventListener('click',()=>{const file=fileById.get(Number(row.dataset.id));if(file){selectFile(file);focusFile(file);} }));dirty=true;
 }
@@ -621,6 +623,29 @@ function drawCityOverlay(){
   if(showCode){fillCodeOverview();uploadCodeOverview();}
 }
 
+// Glowing arcs from the selected building to every file it imports or is imported by.
+function updateTrails(){
+  const origin=selected?.id?layoutById.get(selected.id)?.city:null;
+  if(!origin||!cityModel){renderer.setTrails([]);return;}
+  const top=b=>[b.x+b.w/2,b.y+b.h/2,b.height],arcs=[],seen=new Set();
+  for(const edge of edgesByFile.get(selected.id)||[]){
+    const key=`${edge.from}>${edge.to}`;if(seen.has(key))continue;seen.add(key);
+    const from=layoutById.get(edge.from)?.city,to=layoutById.get(edge.to)?.city;if(!from||!to||from===to)continue;
+    const a=top(from),b=top(to),lift=12+Math.hypot(b[0]-a[0],b[1]-a[1])*.35,points=[];
+    for(let i=0;i<=28;i++){const t=i/28;points.push([a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t+Math.sin(Math.PI*t)*lift]);}
+    arcs.push({points,kind:edge.confidence==='known'?0:1});
+  }
+  renderer.setTrails(arcs);dirty=true;
+}
+
+// Search hits become light columns visible across the city.
+function updateBeacons(){
+  if(!cityModel){renderer.setBeacons([]);return;}
+  const ids=new Set(searchHits.map(hit=>hit.entityId??hit.id)),beams=[];
+  for(const id of ids){const b=layoutById.get(id)?.city;if(!b)continue;const w=Math.max(3,Math.min(b.w,b.h)*.5);beams.push({x:b.x+b.w/2-w/2,y:b.y+b.h/2-w/2,w,h:w,height:b.height+Math.max(250,cityModel.width*.4),color:[.95,.8,.3]});}
+  renderer.setBeacons(beams);dirty=true;
+}
+
 // ---- In-world text: ground names, roof plates, wall signs and the facade of the targeted file ----
 const labelAtlas=new LabelAtlas();
 let signState={key:'',at:0};
@@ -649,7 +674,8 @@ function buildSignQuads(signs,focus,radius,eye,heli,yaw){
   const label=(text,style)=>{if(signs.full)return null;const entry=labelAtlas.get(text,style);if(!entry)signs.full=true;return entry;};
   const add=(quad,uv)=>signs.quads.push({...quad,uv}),right=heading(yaw).right;
   // District names float above their tallest tower, turned toward the camera like skyline signs.
-  for(const district of cityDistricts){
+  // District names are for orientation from a distance; close in they would fill the view.
+  for(const district of heli&&renderer.city.distance<350?[]:cityDistricts){
     const entry=label(district.block.node.name,'plate');if(!entry)continue;
     const b=district.block,width=Math.min(Math.max(b.w,b.h)*.5,Math.max(40,district.top*1.2)),height=width/entry.aspect;
     add({c:[b.x+b.w/2,b.y+b.h/2,district.top+height/2+8],u:[right[0]*width/2,right[1]*width/2,0],v:[0,0,height/2]},entry);
@@ -819,6 +845,7 @@ function animate(now){
     for(const key of Object.keys(cameraAnimation.to))cameraAnimation.camera[key]=cameraAnimation.from[key]+(cameraAnimation.to[key]-cameraAnimation.from[key])*eased;
     if(progress>=1)cameraAnimation=null;dirty=true;
   }
+  if(renderer.animating)dirty=true;
   if(dirty){
     // The overlay fills the code overview, so draw it before the GPU pass that samples it.
     renderer.resize();drawOverlay();renderer.codeOn=showCode;renderer.render();dirty=codeTexturesPending;

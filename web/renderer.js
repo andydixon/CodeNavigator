@@ -16,7 +16,7 @@ const VERTICES = new Float32Array([
 ]);
 
 // Instance kinds in the box program.
-export const KIND = { building: 0, block: 1, ground: 2 };
+export const KIND = { building: 0, block: 1, ground: 2, beacon: 3 };
 const FLOATS_PER_INSTANCE = 16;
 
 // Landscape heights are exaggerated relative to the 1000x680 map so small repositories still read as 3D.
@@ -53,8 +53,10 @@ out vec4 vColor;
 out vec3 vUnit;
 out vec2 vAtlas;
 out vec3 vSize;
+out float vDepth;
 flat out int vFace;
 flat out ivec2 vKind;
+flat out vec2 vLit;
 void main(){
   int kind = int(aMeta.x + .5);
   float height = kind == 0 && uMode < 1.5 ? max(1.0, aColorHeight.a) : aColorHeight.a;
@@ -65,7 +67,9 @@ void main(){
   vSize = vec3(aRect.zw, height);
   vFace = gl_VertexID / 6;
   vKind = ivec2(kind, int(aMeta.w + .5));
+  vLit = aMeta.yz;
   gl_Position = projectWorld(world);
+  vDepth = gl_Position.w;
 }`;
 
 const FS = `#version 300 es
@@ -74,14 +78,30 @@ in vec4 vColor;
 in vec3 vUnit;
 in vec2 vAtlas;
 in vec3 vSize;
+in float vDepth;
 flat in int vFace;
 flat in ivec2 vKind;
+flat in vec2 vLit;
 uniform float uMode;
 uniform float uAlpha;
 uniform sampler2D uCode;
 uniform float uCodeOn;
+uniform float uFogDensity;
+uniform vec3 uFogColor;
 out vec4 outColor;
+float hash(vec3 p){ return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }
+vec3 fog(vec3 color){
+  float amount = 1.0 - exp(-pow(vDepth * uFogDensity, 2.0));
+  return mix(color, uFogColor, amount);
+}
 void main(){
+  if(vKind.x == 3){
+    // Search beacon: a light column fading upward, open at the top.
+    if(vFace == 0 || vFace == 5) discard;
+    float fade = pow(1.0 - vUnit.z, 1.6);
+    outColor = vec4(vColor.rgb * fade * .55, 0.0);
+    return;
+  }
   if(uMode < .5 && vFace > 0) discard;
   vec2 face = vFace == 0 || vFace == 5 ? vUnit.xy : vFace < 3 ? vUnit.xz : vUnit.yz;
   float edge = min(min(face.x, 1.0-face.x), min(face.y, 1.0-face.y));
@@ -91,9 +111,11 @@ void main(){
   vec3 base = uMode < .5 ? mix(top, vColor.rgb, .07) : top;
   vec3 stroke = mix(vColor.rgb, vec3(1.0), .12);
   if(vKind.x == 2){
-    outColor = vec4(.03, .036, .052, uAlpha); // asphalt
+    outColor = vec4(fog(vec3(.03, .036, .052)), uAlpha); // asphalt
     return;
   }
+  bool city = uMode > 1.5;
+  if(city) stroke = mix(vColor.rgb, vec3(1.0), .3) * 1.2; // neon edges at night
   if(vKind.x == 1){
     // Blocks are raised pavements tinted by their dominant layer.
     base = mix(vec3(.075, .085, .11), vColor.rgb, .07);
@@ -102,14 +124,26 @@ void main(){
     // Walls: a fixed key light per side and a darker foot make buildings read as solids.
     float light = vFace == 1 ? .34 : vFace == 2 ? .2 : vFace == 3 ? .26 : .42;
     base = mix(top, vColor.rgb, light) * (.55 + .45 * vUnit.z);
-    stroke = mix(stroke, base, .45);
+    stroke = mix(stroke, base, city ? .25 : .45);
+    if(city){
+      // Windows: a grid in metres; the lit share follows the file's definition count.
+      float wide = vFace < 3 ? vSize.x : vSize.y;
+      vec2 metres = vec2((vFace < 3 ? vUnit.x : vUnit.y) * wide, vUnit.z * vSize.z);
+      vec2 cell = floor(metres / vec2(3.2, 3.5)), local = fract(metres / vec2(3.2, 3.5));
+      float pane = step(.22, local.x) * step(local.x, .78) * step(.3, local.y) * step(local.y, .78);
+      pane *= step(1.0, cell.y) * step(metres.y, vSize.z - 2.0) * step(1.6, metres.x) * step(metres.x, wide - 1.6);
+      bool lit = hash(vec3(cell, vLit.y + float(vFace) * 17.0)) < vLit.x;
+      vec3 glass = lit ? mix(vec3(1.0, .82, .52), vColor.rgb, .35) * (.8 + .4 * hash(vec3(cell.yx, vLit.y))) : base * .55;
+      base = mix(base, glass, pane);
+    }
   } else if(vFace == 0 && uCodeOn > .5){
     // Roofs sample the code overview canvas at this file's rectangle.
     vec4 code = texture(uCode, vAtlas);
     base = mix(base, code.rgb / max(code.a, .001), code.a * .92);
   }
   if(vKind.y == 1) stroke = vec3(1.0, .94, .54); // selected
-  outColor = vec4(mix(stroke, base, border), uAlpha);
+  vec3 color = mix(stroke, base, border);
+  outColor = vec4(city ? fog(color) : color, uAlpha);
 }`;
 
 const GRID_VS = `#version 300 es
@@ -133,23 +167,61 @@ layout(location=3) in vec3 aAxisV;
 layout(location=4) in vec4 aUv;
 uniform mat4 uViewProj;
 out vec2 vUv;
+out float vDepth;
 void main(){
   vec3 world = aCenter + aAxisU * (aCorner.x * 2.0 - 1.0) + aAxisV * (aCorner.y * 2.0 - 1.0);
   vUv = aUv.xy + vec2(aCorner.x, 1.0 - aCorner.y) * aUv.zw;
   gl_Position = uViewProj * vec4(world, 1.0);
+  vDepth = gl_Position.w;
 }`;
+const SIGN_FLOATS = 13;
+
+// Import trails: screen-space ribbons along arcs, with dashes flowing from importer to imported.
+const TRAIL_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aOther;
+layout(location=2) in vec3 aSideTKind;
+uniform mat4 uViewProj;
+uniform vec2 uViewport;
+out float vT;
+flat out int vKind;
+void main(){
+  vec4 a = uViewProj * vec4(aPos, 1.0), b = uViewProj * vec4(aOther, 1.0);
+  vT = aSideTKind.y; vKind = int(aSideTKind.z + .5);
+  if(a.w < .2 || b.w < .2){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; } // behind the camera
+  vec2 dir = normalize((b.xy / b.w - a.xy / a.w) * uViewport + 1e-6);
+  vec2 offset = vec2(-dir.y, dir.x) * aSideTKind.x * 2.5 / uViewport;
+  gl_Position = a + vec4(offset * a.w, 0.0, 0.0);
+}`;
+
+const TRAIL_FS = `#version 300 es
+precision highp float;
+in float vT;
+flat in int vKind;
+uniform float uTime;
+out vec4 outColor;
+void main(){
+  vec3 color = vKind == 0 ? vec3(.21, .83, .76) : vec3(.97, .74, .3);
+  float dash = fract(vT * 14.0 - uTime * .9);
+  float glow = .35 + .65 * smoothstep(.0, .25, dash) * (1.0 - smoothstep(.55, .8, dash));
+  if(vKind == 1 && dash > .6) discard; // inferred links are dashed
+  outColor = vec4(color * glow, 0.0);
+}`;
+const TRAIL_FLOATS = 9;
 
 const SIGN_FS = `#version 300 es
 precision highp float;
 in vec2 vUv;
+in float vDepth;
 uniform sampler2D uTexture;
+uniform float uFogDensity;
 out vec4 outColor;
 void main(){
   vec4 color = texture(uTexture, vUv);
   if(color.a < .02) discard;
-  outColor = color;
+  outColor = color * exp(-pow(vDepth * uFogDensity, 2.0)); // premultiplied, so fading toward clear
 }`;
-const SIGN_FLOATS = 13;
 
 function program(gl, vertex, fragment) {
   const value = gl.createProgram();
@@ -195,6 +267,12 @@ export class LandscapeRenderer {
     this.corners = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, this.corners); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
     this.signLayer = this.quadLayer(); this.facadeLayer = this.quadLayer();
     this.atlasTexture = this.texture(); this.facadeTexture = this.texture(); this.atlasGeneration = -1;
+    this.trailProgram = program(gl, TRAIL_VS, TRAIL_FS); this.trailUniforms = uniformsOf(gl, this.trailProgram);
+    this.trailLayer = { vao: gl.createVertexArray(), buffer: gl.createBuffer(), count: 0 };
+    gl.bindVertexArray(this.trailLayer.vao); gl.bindBuffer(gl.ARRAY_BUFFER, this.trailLayer.buffer);
+    [[0, 0], [1, 12], [2, 24]].forEach(([index, offset]) => { gl.enableVertexAttribArray(index); gl.vertexAttribPointer(index, 3, gl.FLOAT, false, TRAIL_FLOATS * 4, offset); });
+    this.beaconLayer = this.boxLayer();
+    this.time = 0;
     this.camera = { x: 500, y: 350, zoom: 1, yaw: -.1, pitch: .78, distance: 3.5 };
     // City camera: 'heli' orbits a ground target; 'walk' and 'fly' look out from an eye position.
     this.city = { view: 'heli', x: 0, y: 0, yaw: -.12, pitch: .8, distance: 500, ex: 0, ey: 0, ez: EYE_HEIGHT, lookYaw: 0, lookPitch: 0 };
@@ -260,6 +338,31 @@ export class LandscapeRenderer {
     this.facadeLayer.count = 1;
   }
 
+  // arcs: [{ points: [[x,y,z], ...], kind: 0 known | 1 inferred }] ordered from importer to imported.
+  setTrails(arcs) {
+    const vertices = [];
+    for (const arc of arcs) {
+      const n = arc.points.length - 1;
+      for (let i = 0; i < n; i++) {
+        const a = arc.points[i], b = arc.points[i + 1], ta = i / n, tb = (i + 1) / n;
+        // Two triangles per segment; the far end looks back at the near end, so its side flips.
+        vertices.push(...a, ...b, 1, ta, arc.kind, ...a, ...b, -1, ta, arc.kind, ...b, ...a, -1, tb, arc.kind);
+        vertices.push(...a, ...b, -1, ta, arc.kind, ...b, ...a, 1, tb, arc.kind, ...b, ...a, -1, tb, arc.kind);
+      }
+    }
+    const gl = this.gl; gl.bindBuffer(gl.ARRAY_BUFFER, this.trailLayer.buffer); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.DYNAMIC_DRAW);
+    this.trailLayer.count = vertices.length / TRAIL_FLOATS;
+  }
+
+  // beams: [{ x, y, w, h, height, color }] rising from search hits.
+  setBeacons(beams) {
+    const packed = new Float32Array(beams.length * FLOATS_PER_INSTANCE);
+    beams.forEach((b, i) => packed.set([b.x, b.y, b.w, b.h, ...b.color, b.height, 0, 0, 0, 0, KIND.beacon, 0, 0, 0], i * FLOATS_PER_INSTANCE));
+    this.upload(this.beaconLayer, packed);
+  }
+
+  get animating() { return this.mode === 'city' && this.trailLayer.count > 0; }
+
   syncAtlas() {
     const gl = this.gl, atlas = this.atlas; if (!atlas) return;
     gl.bindTexture(gl.TEXTURE_2D, this.atlasTexture); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
@@ -280,7 +383,7 @@ export class LandscapeRenderer {
     if (!layer.count) return;
     const gl = this.gl, u = this.signUniforms;
     gl.useProgram(this.signProgram); gl.bindVertexArray(layer.vao);
-    gl.uniformMatrix4fv(u.uViewProj, false, this.viewProj);
+    gl.uniformMatrix4fv(u.uViewProj, false, this.viewProj); gl.uniform1f(u.uFogDensity, this.fogDensity());
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texture); gl.uniform1i(u.uTexture, 0);
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, layer.count);
   }
@@ -301,7 +404,7 @@ export class LandscapeRenderer {
   // City instances: [{x,y,w,h,height,color,atlas:[u,v,du,dv],kind,id}] in metres.
   setCity(instances, bounds) {
     const packed = new Float32Array(instances.length * FLOATS_PER_INSTANCE);
-    instances.forEach((b, i) => packed.set([b.x, b.y, b.w, b.h, ...b.color, b.height, ...(b.atlas || [0, 0, 0, 0]), b.kind, 0, b.id || 0, 0], i * FLOATS_PER_INSTANCE));
+    instances.forEach((b, i) => packed.set([b.x, b.y, b.w, b.h, ...b.color, b.height, ...(b.atlas || [0, 0, 0, 0]), b.kind, b.lit || 0, b.id || 0, 0], i * FLOATS_PER_INSTANCE));
     this.cityInstances = instances; this.cityBounds = bounds;
     this.upload(this.cityLayer, packed);
   }
@@ -377,9 +480,19 @@ export class LandscapeRenderer {
     this.inverseViewProj = null;
   }
 
+  // Night fog: thick enough to give depth, thin enough to keep the city legible from the air.
+  fogDensity() {
+    if (this.mode !== 'city') return 0;
+    const c = this.city, size = Math.max(this.cityBounds?.width || 1000, this.cityBounds?.height || 1000);
+    if (c.view === 'heli') return 1.1 / (c.distance * 2.4 + size * .8);
+    return 1 / (c.view === 'walk' ? 520 : 700 + c.ez * 5);
+  }
+
   render(alpha = 1) {
     const gl = this.gl; this.resize();
-    gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    const fogColor = [.027, .031, .05], fog = this.fogDensity();
+    if (this.mode === 'city') gl.clearColor(...fogColor, 1); else gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     if (this.mode === '3d') {
       // Ground grid first without writing depth; buildings then cover it where they stand.
@@ -391,8 +504,19 @@ export class LandscapeRenderer {
     gl.uniform1f(u.uAlpha, alpha);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.codeTexture); gl.uniform1i(u.uCode, 0);
     gl.uniform1f(u.uCodeOn, this.codeOn && this.mode !== '2d' ? 1 : 0);
+    gl.uniform1f(u.uFogDensity, fog); gl.uniform3f(u.uFogColor, ...fogColor);
     gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, layer.count);
     if (this.mode === 'city') {
+      // Light effects add colour and never occlude: additive blending without depth writes.
+      gl.depthMask(false); gl.blendFunc(gl.ONE, gl.ONE);
+      if (this.beaconLayer.count) { gl.bindVertexArray(this.beaconLayer.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, this.beaconLayer.count); }
+      if (this.trailLayer.count) {
+        const t = this.trailUniforms;
+        gl.useProgram(this.trailProgram); gl.bindVertexArray(this.trailLayer.vao);
+        gl.uniformMatrix4fv(t.uViewProj, false, this.viewProj); gl.uniform2f(t.uViewport, this.width, this.height); gl.uniform1f(t.uTime, performance.now() / 1000);
+        gl.drawArrays(gl.TRIANGLES, 0, this.trailLayer.count);
+      }
+      gl.depthMask(true); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       // Signs sit on or just off surfaces: test depth, don't write it, and pull them forward a touch.
       this.syncAtlas();
       gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false);

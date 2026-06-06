@@ -7,6 +7,7 @@ No dependencies beyond the Go standard library.
 ```bash
 go run .                 # http://127.0.0.1:4177
 go test -race ./...
+node --test webtest/*.test.mjs   # frontend maths: camera, city layout, collision, signs, links
 go test -run x -bench Index   # indexes $CODENAV_BENCH_DIR (default: Go's stdlib source)
 ./build.sh [tag]         # Docker image, tests run during the build
 docker run --rm -p 4177:4177 codenavigator:latest
@@ -19,6 +20,24 @@ Configuration:
 - `GITHUB_APP_SLUG`: the app's URL name, for the "grant repository access" link
 
 `git` must be on `PATH` to load GitHub repositories (the image includes it).
+
+## Views
+
+- **2D map**: squarified treemap of files, sized by lines or references.
+- **3D landscape**: the same map extruded, orbit with drag, pan with Shift+drag, scroll to dolly.
+- **City**: folders become districts and blocks separated by roads, files become buildings
+  (footprint from lines, height from complexity, lit windows from definitions).
+  - `1` Helicopter, `2` Walk, `3` Fly. In walk/fly: click for mouse-look, WASD, Shift to run,
+    Space/C up and down when flying, `E` inspects the building in the crosshair.
+  - Double-click a street to drop in; the minimap shows your heading and teleports on click.
+  - Selecting a file draws import trails (cyan known, amber inferred); search hits raise beacons.
+  - `T` or **Tour** flies over the largest districts. **Copy link** shares the repository, view,
+    camera and selected file as a URL fragment (GitHub repositories only).
+  - Touch: left thumb joystick, right thumb look, pinch to zoom.
+
+Frontend modules (plain ES modules, no build step): `camera.js` (matrices and orbit pose),
+`city.js` (layout, collision, picking, sign placement, tour and links), `labels.js` (text atlas),
+`renderer.js` (WebGL2 passes) and `app.js` (UI and input).
 
 ## Multiple users
 

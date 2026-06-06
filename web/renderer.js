@@ -64,44 +64,50 @@ void main(){
   vColor = vec4(aColorHeight.rgb, 1.0);
   vUnit = aUnit;
   vAtlas = aAtlas.xy + aUnit.xy * aAtlas.zw;
-  vSize = vec3(aRect.zw, height);
   vFace = gl_VertexID / 6;
   vKind = ivec2(kind, int(aMeta.w + .5));
+  vSize = vec3(aRect.zw, height);
   vLit = aMeta.yz;
   gl_Position = projectWorld(world);
   vDepth = gl_Position.w;
 }`;
 
-const FS = `#version 300 es
+// Two variants from one source: the landscape build compiles none of the city's fog, window
+// and beacon code, which otherwise tripled fragment cost in software renderers.
+const fragmentShader = city => `#version 300 es
 precision highp float;
+${city ? '#define CITY 1' : ''}
 in vec4 vColor;
 in vec3 vUnit;
 in vec2 vAtlas;
-in vec3 vSize;
-in float vDepth;
 flat in int vFace;
 flat in ivec2 vKind;
-flat in vec2 vLit;
 uniform float uMode;
 uniform float uAlpha;
 uniform sampler2D uCode;
 uniform float uCodeOn;
+out vec4 outColor;
+#ifdef CITY
+in vec3 vSize;
+in float vDepth;
+flat in vec2 vLit;
 uniform float uFogDensity;
 uniform vec3 uFogColor;
-out vec4 outColor;
 float hash(vec3 p){ return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }
-vec3 fog(vec3 color){
-  float amount = 1.0 - exp(-pow(vDepth * uFogDensity, 2.0));
-  return mix(color, uFogColor, amount);
-}
+vec3 fog(vec3 color){ return mix(color, uFogColor, 1.0 - exp(-pow(vDepth * uFogDensity, 2.0))); }
+#else
+vec3 fog(vec3 color){ return color; }
+#endif
 void main(){
+#ifdef CITY
   if(vKind.x == 3){
     // Search beacon: a light column fading upward, open at the top.
     if(vFace == 0 || vFace == 5) discard;
-    float fade = pow(1.0 - vUnit.z, 1.6);
-    outColor = vec4(vColor.rgb * fade * .55, 0.0);
+    outColor = vec4(vColor.rgb * pow(1.0 - vUnit.z, 1.6) * .55, 0.0);
     return;
   }
+  if(vKind.x == 2){ outColor = vec4(fog(vec3(.03, .036, .052)), uAlpha); return; } // asphalt
+#endif
   if(uMode < .5 && vFace > 0) discard;
   vec2 face = vFace == 0 || vFace == 5 ? vUnit.xy : vFace < 3 ? vUnit.xz : vUnit.yz;
   float edge = min(min(face.x, 1.0-face.x), min(face.y, 1.0-face.y));
@@ -109,13 +115,11 @@ void main(){
   // Tile tops match TILE_TOP in app.js so source drawn over a roof blends in; 2D gets a faint layer tint.
   vec3 top = vec3(.055, .067, .094);
   vec3 base = uMode < .5 ? mix(top, vColor.rgb, .07) : top;
+#ifdef CITY
+  vec3 stroke = mix(vColor.rgb, vec3(1.0), .3) * 1.2; // neon edges at night
+#else
   vec3 stroke = mix(vColor.rgb, vec3(1.0), .12);
-  if(vKind.x == 2){
-    outColor = vec4(fog(vec3(.03, .036, .052)), uAlpha); // asphalt
-    return;
-  }
-  bool city = uMode > 1.5;
-  if(city) stroke = mix(vColor.rgb, vec3(1.0), .3) * 1.2; // neon edges at night
+#endif
   if(vKind.x == 1){
     // Blocks are raised pavements tinted by their dominant layer.
     base = mix(vec3(.075, .085, .11), vColor.rgb, .07);
@@ -124,26 +128,27 @@ void main(){
     // Walls: a fixed key light per side and a darker foot make buildings read as solids.
     float light = vFace == 1 ? .34 : vFace == 2 ? .2 : vFace == 3 ? .26 : .42;
     base = mix(top, vColor.rgb, light) * (.55 + .45 * vUnit.z);
-    stroke = mix(stroke, base, city ? .25 : .45);
-    if(city){
-      // Windows: a grid in metres; the lit share follows the file's definition count.
-      float wide = vFace < 3 ? vSize.x : vSize.y;
-      vec2 metres = vec2((vFace < 3 ? vUnit.x : vUnit.y) * wide, vUnit.z * vSize.z);
-      vec2 cell = floor(metres / vec2(3.2, 3.5)), local = fract(metres / vec2(3.2, 3.5));
-      float pane = step(.22, local.x) * step(local.x, .78) * step(.3, local.y) * step(local.y, .78);
-      pane *= step(1.0, cell.y) * step(metres.y, vSize.z - 2.0) * step(1.6, metres.x) * step(metres.x, wide - 1.6);
-      bool lit = hash(vec3(cell, vLit.y + float(vFace) * 17.0)) < vLit.x;
-      vec3 glass = lit ? mix(vec3(1.0, .82, .52), vColor.rgb, .35) * (.8 + .4 * hash(vec3(cell.yx, vLit.y))) : base * .55;
-      base = mix(base, glass, pane);
-    }
+#ifdef CITY
+    stroke = mix(stroke, base, .25);
+    // Windows: a grid in metres; the lit share follows the file's definition count.
+    float wide = vFace < 3 ? vSize.x : vSize.y;
+    vec2 metres = vec2((vFace < 3 ? vUnit.x : vUnit.y) * wide, vUnit.z * vSize.z);
+    vec2 cell = floor(metres / vec2(3.2, 3.5)), local = fract(metres / vec2(3.2, 3.5));
+    float pane = step(.22, local.x) * step(local.x, .78) * step(.3, local.y) * step(local.y, .78);
+    pane *= step(1.0, cell.y) * step(metres.y, vSize.z - 2.0) * step(1.6, metres.x) * step(metres.x, wide - 1.6);
+    bool lit = hash(vec3(cell, vLit.y + float(vFace) * 17.0)) < vLit.x;
+    vec3 glass = lit ? mix(vec3(1.0, .82, .52), vColor.rgb, .35) * (.8 + .4 * hash(vec3(cell.yx, vLit.y))) : base * .55;
+    base = mix(base, glass, pane);
+#else
+    stroke = mix(stroke, base, .45);
+#endif
   } else if(vFace == 0 && uCodeOn > .5){
     // Roofs sample the code overview canvas at this file's rectangle.
     vec4 code = texture(uCode, vAtlas);
     base = mix(base, code.rgb / max(code.a, .001), code.a * .92);
   }
   if(vKind.y == 1) stroke = vec3(1.0, .94, .54); // selected
-  vec3 color = mix(stroke, base, border);
-  outColor = vec4(city ? fog(color) : color, uAlpha);
+  outColor = vec4(fog(mix(stroke, base, border)), uAlpha);
 }`;
 
 const GRID_VS = `#version 300 es
@@ -250,7 +255,8 @@ export class LandscapeRenderer {
     const gl = canvas.getContext('webgl2', { antialias: true, alpha: true, depth: true, powerPreference: 'high-performance' });
     if (!gl) throw new Error('WebGL2 is required');
     this.gl = gl;
-    this.program = program(gl, VS, FS); this.uniforms = uniformsOf(gl, this.program);
+    this.program = program(gl, VS, fragmentShader(false)); this.uniforms = uniformsOf(gl, this.program);
+    this.cityProgram = program(gl, VS, fragmentShader(true)); this.cityUniforms = uniformsOf(gl, this.cityProgram);
     this.gridProgram = program(gl, GRID_VS, GRID_FS); this.gridUniforms = uniformsOf(gl, this.gridProgram);
     const grid = [];
     for (let x = -200; x <= 1200; x += 100) grid.push(x, -200, x, 900);
@@ -499,12 +505,12 @@ export class LandscapeRenderer {
       gl.useProgram(this.gridProgram); gl.bindVertexArray(this.gridVao); this.setCameraUniforms(this.gridUniforms);
       gl.depthMask(false); gl.drawArrays(gl.LINES, 0, this.gridCount); gl.depthMask(true);
     }
-    const u = this.uniforms, layer = this.mode === 'city' ? this.cityLayer : this.landscape;
-    gl.useProgram(this.program); gl.bindVertexArray(layer.vao); this.setCameraUniforms(u);
+    const city = this.mode === 'city', u = city ? this.cityUniforms : this.uniforms, layer = city ? this.cityLayer : this.landscape;
+    gl.useProgram(city ? this.cityProgram : this.program); gl.bindVertexArray(layer.vao); this.setCameraUniforms(u);
     gl.uniform1f(u.uAlpha, alpha);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.codeTexture); gl.uniform1i(u.uCode, 0);
     gl.uniform1f(u.uCodeOn, this.codeOn && this.mode !== '2d' ? 1 : 0);
-    gl.uniform1f(u.uFogDensity, fog); gl.uniform3f(u.uFogColor, ...fogColor);
+    if (city) { gl.uniform1f(u.uFogDensity, fog); gl.uniform3f(u.uFogColor, ...fogColor); }
     gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, layer.count);
     if (this.mode === 'city') {
       // Light effects add colour and never occlude: additive blending without depth writes.

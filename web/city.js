@@ -306,3 +306,34 @@ export function joystick(dx, dy, radius = 56) {
   const scale = Math.min(1, length / radius) / length;
   return { forward: -dy * scale, right: dx * scale };
 }
+
+// A quad's text reads correctly only from the side where (u x v) points away from the viewer
+// (the world is left-handed). The sign shader applies the same test to skip mirrored faces.
+export function readableFrom(quad, eye) {
+  const [ux, uy, uz] = quad.u, [vx, vy, vz] = quad.v;
+  const n = [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx];
+  return n[0] * (eye[0] - quad.c[0]) + n[1] * (eye[1] - quad.c[1]) + n[2] * (eye[2] - quad.c[2]) < 0;
+}
+
+// Blade signs stick out from the wall like shop signs, so names read while walking alongside.
+// Each blade is two back-to-back faces; only the one readable from the viewer's side is drawn.
+// clearance(x, y, direction) returns the free distance outward, so blades never pierce a neighbour.
+export function bladeSigns(b, eye, aspect, clearance, height = .7, z = 4.2) {
+  const out = [], inset = .15;
+  for (const wall of walls(b)) {
+    if ((eye[0] - wall.c[0]) * wall.n[0] + (eye[1] - wall.c[1]) * wall.n[1] <= 0) continue;
+    const count = Math.max(1, Math.floor(wall.width / 24)), segment = wall.width / count, along = [wall.n[1], -wall.n[0]];
+    const signZ = Math.max(2.6, Math.min(z, b.height - height));
+    for (let i = 0; i < count; i++) {
+      // Blades sit a third of the way into each segment so they don't overlap the flat wall sign.
+      const offset = (i + .3) * segment - wall.width / 2, x = wall.c[0] + along[0] * offset, y = wall.c[1] + along[1] * offset;
+      const room = clearance ? clearance(x, y, wall.n) - inset - .5 : Infinity;
+      const width = Math.min(3.2, aspect * height, room);
+      if (width < 1.2) continue;
+      const c = [x + wall.n[0] * (inset + width / 2), y + wall.n[1] * (inset + width / 2), signZ];
+      const u = [wall.n[0] * width / 2, wall.n[1] * width / 2, 0], v = [0, 0, width / aspect / 2];
+      out.push({ c, u, v }, { c, u: u.map(value => -value), v });
+    }
+  }
+  return out;
+}

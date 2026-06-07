@@ -40,3 +40,24 @@ test('facade covers the most squarely facing wall within the building', () => {
   assert.ok(Math.abs(width / height - .5) < 1e-9 && quad.c[2] + height / 2 <= building.height);
   assert.deepEqual(flatQuad(1, 2, 3, 4, 2), { c: [1, 2, 3], u: [2, 0, 0], v: [0, -1, 0] });
 });
+
+import { bladeSigns, readableFrom } from '../web/city.js';
+
+test('blade signs project from the wall and exactly one face reads from either side', () => {
+  const south = { x: 0, y: 0, w: 20, h: 10, height: 30 };
+  const blades = bladeSigns(south, [5, 14, 1.7], 4);
+  assert.equal(blades.length, 2, 'one blade (two faces) on the south wall only');
+  const [a, b] = blades;
+  assert.ok(Math.abs(a.u[0]) < 1e-9 && a.u[1] > 0 && a.c[1] > 10, 'perpendicular to the wall, outside it');
+  for (const eye of [[-5, 14, 1.7], [25, 14, 1.7]]) {
+    assert.equal(readableFrom(a, eye) + readableFrom(b, eye), 1, `one readable face from ${eye}`);
+  }
+  assert.ok(readableFrom(flatQuad(0, 0, 0, 4, 1), [0, 0, 50]), 'ground labels read from above');
+});
+
+test('blades shrink to the free space and are skipped when a neighbour is too close', () => {
+  const b = { x: 0, y: 0, w: 20, h: 10, height: 30 };
+  assert.ok(bladeSigns(b, [5, 30, 1.7], 10, () => 2.5)[0].u[1] * 2 <= 2.5 - .65 + 1e-9);
+  assert.equal(bladeSigns(b, [5, 30, 1.7], 10, () => 1).length, 0);
+  assert.equal(bladeSigns({ x: 0, y: 0, w: 100, h: 10, height: 30 }, [50, 30, 1.7], 4).length, 8, 'repeats along long walls');
+});

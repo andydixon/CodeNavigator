@@ -1,5 +1,5 @@
 import { LandscapeRenderer, KIND } from './renderer.js';
-import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, flatQuad, wallSigns, facadeQuad, heading, tourStops, encodePlace, decodePlace, joystick, MOVE } from './city.js';
+import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, flatQuad, wallSigns, bladeSigns, facadeQuad, heading, tourStops, encodePlace, decodePlace, joystick, MOVE } from './city.js';
 import { LabelAtlas } from './labels.js';
 import { apiFetch, progressEvents } from './api.mjs';
 
@@ -799,7 +799,11 @@ function buildSignQuads(signs,focus,radius,eye,heli,yaw){
     const entry=label(b.file.name,isSelected?'selected':'plate');if(!entry)break;
     const height=Math.max(1.2,Math.min(Math.min(b.w,b.h)*.22,heli?12:5)),width=Math.min(b.w*.92,height*entry.aspect);
     add(flatQuad(b.x+b.w/2,b.y+b.h/2,b.height+.08,width,width/entry.aspect),entry);roofs++;
-    if(!heli&&d<SIGN_LIMITS.wallRadius&&walls<SIGN_LIMITS.walls){for(const quad of wallSigns(b,eye,entry.aspect))add(quad,entry);walls++;}
+    if(!heli&&d<SIGN_LIMITS.wallRadius&&walls<SIGN_LIMITS.walls){
+      for(const quad of wallSigns(b,eye,entry.aspect))add(quad,entry);
+      for(const quad of bladeSigns(b,eye,entry.aspect,bladeClearance))add(quad,entry);
+      walls++;
+    }
   }
   // Street names on the northern kerb of nearby blocks.
   for(const block of cityModel.blocks){
@@ -808,6 +812,12 @@ function buildSignQuads(signs,focus,radius,eye,heli,yaw){
     const height=Math.min(block.depth===2?2.2:1.4,block.h*.12),width=Math.min(block.w*.7,height*entry.aspect);
     add(flatQuad(block.x+block.w/2,block.y+height*.8,.4,width,width/entry.aspect),entry);
   }
+}
+
+// Free distance from a wall point outward at sign height, so blades stop short of neighbours.
+function bladeClearance(x,y,[nx,ny]){
+  const origin=[x+nx*.05,y+ny*.05,4],hit=pickRay(origin,[nx,ny,0],[...cityIndex.near(x,y,5)],5);
+  return hit?hit.distance:5;
 }
 
 // Source code on the wall of the building in the crosshair, once you are close enough to read it.

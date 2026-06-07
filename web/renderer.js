@@ -171,9 +171,13 @@ layout(location=2) in vec3 aAxisU;
 layout(location=3) in vec3 aAxisV;
 layout(location=4) in vec4 aUv;
 uniform mat4 uViewProj;
+uniform vec3 uEye;
 out vec2 vUv;
 out float vDepth;
+flat out int vMirrored;
 void main(){
+  // Text reads correctly only when (u x v) faces away from the viewer; back-to-back blade faces rely on this.
+  vMirrored = dot(cross(aAxisU, aAxisV), uEye - aCenter) >= 0.0 ? 1 : 0;
   vec3 world = aCenter + aAxisU * (aCorner.x * 2.0 - 1.0) + aAxisV * (aCorner.y * 2.0 - 1.0);
   vUv = aUv.xy + vec2(aCorner.x, 1.0 - aCorner.y) * aUv.zw;
   gl_Position = uViewProj * vec4(world, 1.0);
@@ -219,10 +223,12 @@ const SIGN_FS = `#version 300 es
 precision highp float;
 in vec2 vUv;
 in float vDepth;
+flat in int vMirrored;
 uniform sampler2D uTexture;
 uniform float uFogDensity;
 out vec4 outColor;
 void main(){
+  if(vMirrored == 1) discard;
   vec4 color = texture(uTexture, vUv);
   if(color.a < .02) discard;
   outColor = color * exp(-pow(vDepth * uFogDensity, 2.0)); // premultiplied, so fading toward clear
@@ -389,7 +395,7 @@ export class LandscapeRenderer {
     if (!layer.count) return;
     const gl = this.gl, u = this.signUniforms;
     gl.useProgram(this.signProgram); gl.bindVertexArray(layer.vao);
-    gl.uniformMatrix4fv(u.uViewProj, false, this.viewProj); gl.uniform1f(u.uFogDensity, this.fogDensity());
+    gl.uniformMatrix4fv(u.uViewProj, false, this.viewProj); gl.uniform1f(u.uFogDensity, this.fogDensity()); gl.uniform3f(u.uEye, ...this.eye);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texture); gl.uniform1i(u.uTexture, 0);
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, layer.count);
   }

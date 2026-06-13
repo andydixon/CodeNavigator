@@ -1,5 +1,5 @@
 import { LandscapeRenderer, KIND } from './renderer.js';
-import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, flatQuad, wallSigns, bladeSigns, facadeQuad, heading, tourStops, encodePlace, decodePlace, joystick, MOVE } from './city.js';
+import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, flatQuad, wallSigns, folderBlades, folderLabel, facadeQuad, heading, tourStops, encodePlace, decodePlace, joystick, MOVE } from './city.js';
 import { LabelAtlas } from './labels.js';
 import { apiFetch, progressEvents } from './api.mjs';
 
@@ -46,7 +46,7 @@ let searchHits=[];
 let expandedCoverageLayer=null;
 let coverageActiveIndex=-1;
 let cameraAnimation=null;
-let cityModel=null,cityEntries=[],cityIndex=null,cityFitted=false,cityDistricts=[];
+let cityModel=null,cityEntries=[],cityIndex=null,cityFitted=false,cityDistricts=[],cityFolders=[];
 let currentSnapshot=null;
 let currentName='';
 let currentMetric='lines';
@@ -128,6 +128,10 @@ function computeCity(){
     instances.push({...building,color:item.color,atlas:[item.x/1000,item.y/680,item.w/1000,item.h/680],kind:KIND.building,id:item.id,lit:Math.min(.85,.06+Math.sqrt(symbols)/9)});
   }
   cityIndex=spatialIndex(cityEntries);
+  // Each folder's own buildings (not its subfolders'), for street-corner signs.
+  const byDirectory=new Map();
+  for(const b of cityEntries){const list=byDirectory.get(b.file.directory||'');if(list)list.push(b);else byDirectory.set(b.file.directory||'',[b]);}
+  cityFolders=cityModel.blocks.map(block=>({block,buildings:byDirectory.get(block.node.path)||[],label:folderLabel(block.node.path,currentName)})).filter(folder=>folder.buildings.length);
   const tally=node=>{let files=node.files.length,lines=node.files.reduce((n,f)=>n+(f.lines||0),0);for(const child of node.children.values()){const t=tally(child);files+=t.files;lines+=t.lines;}return{files,lines};};
   cityDistricts=cityModel.blocks.filter(block=>block.depth===1).map(block=>({block,...tally(block.node),top:Math.max(10,...[...cityIndex.near(block.x+block.w/2,block.y+block.h/2,Math.hypot(block.w,block.h)/2)].filter(b=>b.x>=block.x&&b.x+b.w<=block.x+block.w&&b.y>=block.y&&b.y+b.h<=block.y+block.h).map(b=>b.height))}));
   renderer.setCity(instances,{width:cityModel.width,height:cityModel.height});
@@ -801,9 +805,14 @@ function buildSignQuads(signs,focus,radius,eye,heli,yaw){
     add(flatQuad(b.x+b.w/2,b.y+b.h/2,b.height+.08,width,width/entry.aspect),entry);roofs++;
     if(!heli&&d<SIGN_LIMITS.wallRadius&&walls<SIGN_LIMITS.walls){
       for(const quad of wallSigns(b,eye,entry.aspect))add(quad,entry);
-      for(const quad of bladeSigns(b,eye,entry.aspect,bladeClearance))add(quad,entry);
       walls++;
     }
+  }
+  // Folder names on blades at the street corners of nearby blocks, one per side of each intersection.
+  if(!heli)for(const {block,buildings,label:text} of cityFolders){
+    if(Math.max(Math.abs(block.x+block.w/2-focus[0])-block.w/2,Math.abs(block.y+block.h/2-focus[1])-block.h/2)>SIGN_LIMITS.wallRadius)continue;
+    const entry=label(text,'street');if(!entry)break;
+    for(const quad of folderBlades(block,buildings,eye,entry.aspect,bladeClearance))add(quad,entry);
   }
   // Street names on the northern kerb of nearby blocks.
   for(const block of cityModel.blocks){

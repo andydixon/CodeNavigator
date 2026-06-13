@@ -41,23 +41,42 @@ test('facade covers the most squarely facing wall within the building', () => {
   assert.deepEqual(flatQuad(1, 2, 3, 4, 2), { c: [1, 2, 3], u: [2, 0, 0], v: [0, -1, 0] });
 });
 
-import { bladeSigns, readableFrom } from '../web/city.js';
+import { folderBlades, folderLabel, readableFrom } from '../web/city.js';
 
-test('blade signs project from the wall and exactly one face reads from either side', () => {
-  const south = { x: 0, y: 0, w: 20, h: 10, height: 30 };
-  const blades = bladeSigns(south, [5, 14, 1.7], 4);
-  assert.equal(blades.length, 2, 'one blade (two faces) on the south wall only');
-  const [a, b] = blades;
-  assert.ok(Math.abs(a.u[0]) < 1e-9 && a.u[1] > 0 && a.c[1] > 10, 'perpendicular to the wall, outside it');
-  for (const eye of [[-5, 14, 1.7], [25, 14, 1.7]]) {
-    assert.equal(readableFrom(a, eye) + readableFrom(b, eye), 1, `one readable face from ${eye}`);
+// A 2x2 grid of buildings inside a block whose kerb is 2.5 m from the boundary.
+const block = { x: 0, y: 0, w: 50, h: 50 };
+const grid = [
+  { x: 2.5, y: 2.5, w: 20, h: 20, height: 30 }, { x: 27.5, y: 2.5, w: 20, h: 20, height: 30 },
+  { x: 2.5, y: 27.5, w: 20, h: 20, height: 30 }, { x: 27.5, y: 27.5, w: 20, h: 20, height: 30 },
+];
+
+test('folder blades sit at every block corner, on street-facing walls, pointing outward', () => {
+  const blades = folderBlades(block, grid, null, 4);
+  assert.equal(blades.length, 16, 'two walls per corner, two faces per blade');
+  for (let i = 0; i < blades.length; i += 2) {
+    const [a, b] = [blades[i], blades[i + 1]];
+    const outward = [Math.sign(a.u[0]), Math.sign(a.u[1])];
+    const corner = [a.c[0] < 25 ? 0 : 50, a.c[1] < 25 ? 0 : 50];
+    assert.ok(Math.hypot(a.c[0] - corner[0], a.c[1] - corner[1]) < 6, `near its corner: ${a.c}`);
+    assert.ok(outward[0] ? (outward[0] > 0) === (a.c[0] > 25) : (outward[1] > 0) === (a.c[1] > 25), 'projects into the street');
+    for (const eye of [[a.c[0] + a.v[2] * 0 + (a.u[1] ? 10 : 0), a.c[1] + (a.u[0] ? 10 : 0), 2], [a.c[0] - (a.u[1] ? 10 : 0), a.c[1] - (a.u[0] ? 10 : 0), 2]]) {
+      assert.equal(readableFrom(a, eye) + readableFrom(b, eye), 1);
+    }
   }
+});
+
+test('courtyard walls, hidden walls and cramped gaps get no blades', () => {
+  const inner = [{ x: 10, y: 10, w: 30, h: 30, height: 30 }];
+  assert.equal(folderBlades(block, inner, null, 4).length, 0, 'set back from the street');
+  const northOnly = folderBlades(block, grid, [25, -40, 1.7], 4);
+  assert.ok(northOnly.length === 4 && northOnly.every(q => q.c[1] < 2.5), 'only walls facing the viewer');
+  assert.equal(folderBlades(block, grid, null, 4, () => 1).length, 0);
   assert.ok(readableFrom(flatQuad(0, 0, 0, 4, 1), [0, 0, 50]), 'ground labels read from above');
 });
 
-test('blades shrink to the free space and are skipped when a neighbour is too close', () => {
-  const b = { x: 0, y: 0, w: 20, h: 10, height: 30 };
-  assert.ok(bladeSigns(b, [5, 30, 1.7], 10, () => 2.5)[0].u[1] * 2 <= 2.5 - .65 + 1e-9);
-  assert.equal(bladeSigns(b, [5, 30, 1.7], 10, () => 1).length, 0);
-  assert.equal(bladeSigns({ x: 0, y: 0, w: 100, h: 10, height: 30 }, [50, 30, 1.7], 4).length, 8, 'repeats along long walls');
+test('folder labels keep the tail of long paths', () => {
+  assert.equal(folderLabel('', 'prometheus'), 'prometheus');
+  assert.equal(folderLabel('tsdb/chunks', 'x'), 'tsdb/chunks');
+  const long = folderLabel('web/ui/react-app/src/pages/graph/components', 'x');
+  assert.ok(long.startsWith('…/') && long.endsWith('graph/components') && long.length <= 34 + 2, long);
 });

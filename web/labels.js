@@ -19,6 +19,8 @@ const STYLES = {
   // Name plates on roofs and walls.
   plate: { font: '600 30px Inter, system-ui, sans-serif', text: '#f1f3f8', fill: 'rgba(10,12,18,.9)', border: 'rgba(255,255,255,.14)' },
   selected: { font: '700 30px Inter, system-ui, sans-serif', text: '#1a1405', fill: 'rgba(255,236,140,.96)', border: 'rgba(255,255,255,.5)' },
+  // Folder blades at street corners, in street-sign green.
+  street: { font: '600 30px Inter, system-ui, sans-serif', text: '#f4fff9', fill: 'rgba(14,112,76,.96)', border: 'rgba(255,255,255,.55)' },
   // District and street names painted on the ground.
   ground: { font: '700 34px Inter, system-ui, sans-serif', text: 'rgba(205,198,255,.9)' },
 };

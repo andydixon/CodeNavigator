@@ -315,25 +315,62 @@ export function readableFrom(quad, eye) {
   return n[0] * (eye[0] - quad.c[0]) + n[1] * (eye[1] - quad.c[1]) + n[2] * (eye[2] - quad.c[2]) < 0;
 }
 
-// Blade signs stick out from the wall like shop signs, so names read while walking alongside.
-// Each blade is two back-to-back faces; only the one readable from the viewer's side is drawn.
-// clearance(x, y, direction) returns the free distance outward, so blades never pierce a neighbour.
-export function bladeSigns(b, eye, aspect, clearance, height = .7, z = 4.2) {
-  const out = [], inset = .15;
-  for (const wall of walls(b)) {
-    if ((eye[0] - wall.c[0]) * wall.n[0] + (eye[1] - wall.c[1]) * wall.n[1] <= 0) continue;
-    const count = Math.max(1, Math.floor(wall.width / 24)), segment = wall.width / count, along = [wall.n[1], -wall.n[0]];
-    const signZ = Math.max(2.6, Math.min(z, b.height - height));
-    for (let i = 0; i < count; i++) {
-      // Blades sit a third of the way into each segment so they don't overlap the flat wall sign.
-      const offset = (i + .3) * segment - wall.width / 2, x = wall.c[0] + along[0] * offset, y = wall.c[1] + along[1] * offset;
-      const room = clearance ? clearance(x, y, wall.n) - inset - .5 : Infinity;
-      const width = Math.min(3.2, aspect * height, room);
-      if (width < 1.2) continue;
-      const c = [x + wall.n[0] * (inset + width / 2), y + wall.n[1] * (inset + width / 2), signZ];
-      const u = [wall.n[0] * width / 2, wall.n[1] * width / 2, 0], v = [0, 0, width / aspect / 2];
-      out.push({ c, u, v }, { c, u: u.map(value => -value), v });
+// One blade: two back-to-back faces sticking out of a wall at `offset` metres along it from its centre.
+// clearance(x, y, direction) is the free distance outward; blades shorten to it or are skipped.
+function blade(wall, offset, aspect, clearance, z, height = .7, maxWidth = 5.5) {
+  const inset = .15, along = [wall.n[1], -wall.n[0]];
+  const x = wall.c[0] + along[0] * offset, y = wall.c[1] + along[1] * offset;
+  const room = clearance ? clearance(x, y, wall.n) - inset - .5 : Infinity;
+  const width = Math.min(maxWidth, aspect * height, room);
+  if (width < 1.2) return [];
+  const c = [x + wall.n[0] * (inset + width / 2), y + wall.n[1] * (inset + width / 2), z];
+  const u = [wall.n[0] * width / 2, wall.n[1] * width / 2, 0], v = [0, 0, width / aspect / 2];
+  return [{ c, u, v }, { c, u: u.map(value => -value), v }];
+}
+
+// Street-corner signs naming a folder. For each corner of the folder's block, the building nearest
+// that corner gets a blade on each of its two walls facing the corner's streets, near the corner end,
+// so an intersection shows every neighbouring folder on its own side. Walls set back further than
+// `edge` metres from the block boundary face an inner courtyard, not a street, and are skipped.
+export function folderBlades(block, buildings, eye, aspect, clearance, edge = 4.5) {
+  const out = [];
+  if (!buildings.length) return out;
+  const corners = [
+    { x: block.x, y: block.y, normals: [[0, -1], [-1, 0]] },
+    { x: block.x + block.w, y: block.y, normals: [[0, -1], [1, 0]] },
+    { x: block.x, y: block.y + block.h, normals: [[0, 1], [-1, 0]] },
+    { x: block.x + block.w, y: block.y + block.h, normals: [[0, 1], [1, 0]] },
+  ];
+  const seen = new Set();
+  for (const corner of corners) {
+    let nearest = null, best = Infinity;
+    for (const b of buildings) {
+      const d = Math.hypot(Math.max(b.x - corner.x, 0, corner.x - b.x - b.w), Math.max(b.y - corner.y, 0, corner.y - b.y - b.h));
+      if (d < best) { best = d; nearest = b; }
+    }
+    for (const n of corner.normals) {
+      const wall = walls(nearest).find(w => w.n[0] === n[0] && w.n[1] === n[1]);
+      const key = `${buildings.indexOf(nearest)}:${n}:${corner.x}:${corner.y}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      // Distance from this wall to the block boundary on the same side.
+      const setback = n[0] ? Math.abs((n[0] > 0 ? block.x + block.w : block.x) - wall.c[0]) : Math.abs((n[1] > 0 ? block.y + block.h : block.y) - wall.c[1]);
+      if (setback > edge) continue;
+      if (eye && (eye[0] - wall.c[0]) * n[0] + (eye[1] - wall.c[1]) * n[1] <= 0) continue;
+      const along = [n[1], -n[0]], toCorner = Math.sign((corner.x - wall.c[0]) * along[0] + (corner.y - wall.c[1]) * along[1]) || 1;
+      const offset = toCorner * Math.max(0, wall.width / 2 - Math.min(1.5, wall.width * .2));
+      out.push(...blade(wall, offset, aspect, clearance, Math.max(2.6, Math.min(4.2, nearest.height - .8))));
     }
   }
   return out;
+}
+
+// Folder path for a street sign: the whole path when short, otherwise its tail after an ellipsis.
+export function folderLabel(path, root, max = 34) {
+  if (!path) return root;
+  if (path.length <= max) return path;
+  const parts = path.split('/');
+  let label = parts.pop();
+  while (parts.length && label.length + parts[parts.length - 1].length + 3 <= max) label = `${parts.pop()}/${label}`;
+  return `…/${label}`;
 }

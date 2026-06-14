@@ -1,5 +1,5 @@
 import { LandscapeRenderer, KIND } from './renderer.js';
-import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, flatQuad, wallSigns, folderBlades, folderLabel, facadeQuad, heading, tourStops, encodePlace, decodePlace, joystick, MOVE } from './city.js';
+import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, flatQuad, wallSigns, folderBlades, folderLabel, facadeQuad, heading, tourStops, encodePlace, decodePlace, joystick, buildNavGrid, routesFrom, MOVE } from './city.js';
 import { LabelAtlas } from './labels.js';
 import { apiFetch, progressEvents } from './api.mjs';
 
@@ -46,7 +46,7 @@ let searchHits=[];
 let expandedCoverageLayer=null;
 let coverageActiveIndex=-1;
 let cameraAnimation=null;
-let cityModel=null,cityEntries=[],cityIndex=null,cityFitted=false,cityDistricts=[],cityFolders=[];
+let cityModel=null,cityEntries=[],cityIndex=null,cityFitted=false,cityDistricts=[],cityFolders=[],navGrid=null,cityRoutes=[];
 let currentSnapshot=null;
 let currentName='';
 let currentMetric='lines';
@@ -128,6 +128,7 @@ function computeCity(){
     instances.push({...building,color:item.color,atlas:[item.x/1000,item.y/680,item.w/1000,item.h/680],kind:KIND.building,id:item.id,lit:Math.min(.85,.06+Math.sqrt(symbols)/9)});
   }
   cityIndex=spatialIndex(cityEntries);
+  navGrid=buildNavGrid(cityEntries,cityModel.blocks,cityModel);
   // Each folder's own buildings (not its subfolders'), for street-corner signs.
   const byDirectory=new Map();
   for(const b of cityEntries){const list=byDirectory.get(b.file.directory||'');if(list)list.push(b);else byDirectory.set(b.file.directory||'',[b]);}
@@ -135,7 +136,7 @@ function computeCity(){
   const tally=node=>{let files=node.files.length,lines=node.files.reduce((n,f)=>n+(f.lines||0),0);for(const child of node.children.values()){const t=tally(child);files+=t.files;lines+=t.lines;}return{files,lines};};
   cityDistricts=cityModel.blocks.filter(block=>block.depth===1).map(block=>({block,...tally(block.node),top:Math.max(10,...[...cityIndex.near(block.x+block.w/2,block.y+block.h/2,Math.hypot(block.w,block.h)/2)].filter(b=>b.x>=block.x&&b.x+b.w<=block.x+block.w&&b.y>=block.y&&b.y+b.h<=block.y+block.h).map(b=>b.height))}));
   renderer.setCity(instances,{width:cityModel.width,height:cityModel.height});
-  buildMinimap();updateCityHud();updateTrails();updateBeacons();signState.key='';facadeState={entry:null,texture:null};renderer.setFacade(null);
+  buildMinimap();updateCityHud();updateTrails();updateRoutes();updateBeacons();signState.key='';facadeState={entry:null,texture:null};renderer.setFacade(null);
 }
 
 // ---- City navigation: helicopter, walk and fly cameras, HUD, crosshair and minimap ----
@@ -166,8 +167,11 @@ function setCityView(view,at){
     c.view=view;
     if(fromHeli||at){
       if(fromHeli)Object.assign(c,{ex:eye[0],ey:eye[1],ez:eye[2],lookYaw:Math.atan2(-forward[0],-forward[1]),lookPitch:Math.asin(Math.max(-1,Math.min(1,forward[2])))});
-      const target=at||[c.x,c.y],spot=collide(target[0],target[1],MOVE.radius*3,cityIndex);
-      animateCameraTo({ex:spot.x,ey:spot.y,ez:view==='walk'?MOVE.eyeHeight:Math.min(Math.max(60,c.ez*.5),260),lookYaw:view==='walk'?openHeading(spot.x,spot.y,c.lookYaw):c.lookYaw,lookPitch:view==='walk'?0:-.3},c,1100);
+      // With routes showing, walking starts at the selected building's door facing down the first route.
+      const route=!at&&view==='walk'&&cityRoutes[0]?.points.length>1?cityRoutes[0].points:null;
+      const target=at||route?.[0]||[c.x,c.y],spot=collide(target[0],target[1],MOVE.radius*3,cityIndex);
+      const facing=route?Math.atan2(-(route[1][0]-route[0][0]),-(route[1][1]-route[0][1])):null;
+      animateCameraTo({ex:spot.x,ey:spot.y,ez:view==='walk'?MOVE.eyeHeight:Math.min(Math.max(60,c.ez*.5),260),lookYaw:facing??(view==='walk'?openHeading(spot.x,spot.y,c.lookYaw):c.lookYaw),lookPitch:view==='walk'?(route?-.18:0):-.3},c,1100);
     }else if(view==='walk'){
       const spot=collide(c.ex,c.ey,MOVE.radius*3,cityIndex);
       animateCameraTo({ex:spot.x,ey:spot.y,ez:MOVE.eyeHeight,lookPitch:0},c,800);
@@ -371,6 +375,10 @@ function drawMinimap(){
   ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,canvas.width,canvas.height);ctx.drawImage(minimapBase,0,0);ctx.setTransform(dpr,0,0,dpr,0,0);
   const heli=c.view==='heli',x=ox+(heli?c.x:c.ex)*scale,y=oy+(heli?c.y:c.ey)*scale,yaw=heli?c.yaw:c.lookYaw;
   if(selected?.id){const b=layoutById.get(selected.id)?.city;if(b){ctx.strokeStyle='#fff08a';ctx.lineWidth=1.5;ctx.strokeRect(ox+b.x*scale-1.5,oy+b.y*scale-1.5,b.w*scale+3,b.h*scale+3);}}
+  for(const route of cityRoutes){
+    ctx.strokeStyle=route.kind===0?'rgba(54,211,194,.9)':'rgba(247,189,77,.9)';ctx.lineWidth=1.4;ctx.beginPath();
+    route.points.forEach(([px,py],i)=>i?ctx.lineTo(ox+px*scale,oy+py*scale):ctx.moveTo(ox+px*scale,oy+py*scale));ctx.stroke();
+  }
   // Heading arrow: yaw 0 points north (up the map).
   ctx.save();ctx.translate(x,y);ctx.rotate(-yaw);
   ctx.fillStyle='rgba(54,211,194,.18)';ctx.beginPath();ctx.moveTo(0,0);ctx.arc(0,0,26,-Math.PI/2-.5,-Math.PI/2+.5);ctx.closePath();ctx.fill();
@@ -578,7 +586,7 @@ function selectFile(file,addHistory=true){
   if(!file)coverageActiveIndex=-1;
   if(file&&addHistory){history=history.filter(item=>item.id!==file.id);history.unshift(file);history=history.slice(0,30);renderHistory();}
   $('#breadcrumbText').textContent=file?`${currentName}  ›  ${file.path}`:currentName;
-  renderer.setSelected(file?.id||0);updateTrails();renderInspector();if(file)loadFileDetails(file);dirty=true;
+  renderer.setSelected(file?.id||0);updateTrails();updateRoutes();renderInspector();if(file)loadFileDetails(file);dirty=true;
 }
 
 function renderInspector(){
@@ -749,6 +757,25 @@ function updateTrails(){
     arcs.push({points,kind:edge.confidence==='known'?0:1});
   }
   renderer.setTrails(arcs);dirty=true;
+}
+
+// Walkable routes along the streets from the selected file to each file it imports.
+// ponytail: one Dijkstra on the main thread (tens of ms on ~1,700 files); move to a worker if large repos stutter.
+const MAX_ROUTES=40;
+function updateRoutes(){
+  const source=selected?.id?layoutById.get(selected.id)?.city:null;
+  cityRoutes=[];
+  if(source&&navGrid){
+    const targets=[],kinds=[],seen=new Set();
+    for(const edge of edgesByFile.get(selected.id)||[]){
+      if(edge.from!==selected.id||seen.has(edge.to))continue;seen.add(edge.to);
+      const target=layoutById.get(edge.to)?.city;if(!target||target===source)continue;
+      targets.push(target);kinds.push(edge.confidence==='known'?0:1);
+      if(targets.length>=MAX_ROUTES)break;
+    }
+    if(targets.length)routesFrom(navGrid,source,targets).forEach((points,i)=>{if(points)cityRoutes.push({points,kind:kinds[i],target:targets[i]});});
+  }
+  renderer.setRoutes(cityRoutes);dirty=true;
 }
 
 // Search hits become light columns visible across the city.

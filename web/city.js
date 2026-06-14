@@ -374,3 +374,137 @@ export function folderLabel(path, root, max = 34) {
   while (parts.length && label.length + parts[parts.length - 1].length + 3 <= max) label = `${parts.pop()}/${label}`;
   return `…/${label}`;
 }
+
+// ---- Walkable grid, routes along streets and wandering residents ----
+
+// Occupancy grid over the city: cells overlapping a building (grown by `margin`) are blocked, and
+// cells inside a block (pavements) cost a little more than roads so routes prefer the street.
+export function buildNavGrid(buildings, blocks, bounds, cell = 3, margin = .5) {
+  const pad = 40, ox = -pad, oy = -pad;
+  const cols = Math.ceil((bounds.width + pad * 2) / cell), rows = Math.ceil((bounds.height + pad * 2) / cell);
+  const blocked = new Uint8Array(cols * rows), cost = new Float32Array(cols * rows).fill(1);
+  const cellsOf = (x0, y0, x1, y1, fn) => {
+    const c0 = Math.max(0, Math.floor((x0 - ox) / cell)), c1 = Math.min(cols - 1, Math.floor((x1 - ox) / cell));
+    const r0 = Math.max(0, Math.floor((y0 - oy) / cell)), r1 = Math.min(rows - 1, Math.floor((y1 - oy) / cell));
+    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) fn(r * cols + c);
+  };
+  for (const block of blocks) if (block.depth > 0) cellsOf(block.x, block.y, block.x + block.w - 1e-6, block.y + block.h - 1e-6, i => { cost[i] = 1.35; });
+  for (const b of buildings) cellsOf(b.x - margin, b.y - margin, b.x + b.w + margin - 1e-6, b.y + b.h + margin - 1e-6, i => { blocked[i] = 1; });
+  return { cell, cols, rows, ox, oy, blocked, cost };
+}
+
+export const cellCenter = (grid, index) => [grid.ox + (index % grid.cols + .5) * grid.cell, grid.oy + (Math.floor(index / grid.cols) + .5) * grid.cell];
+const cellAt = (grid, x, y) => {
+  const c = Math.floor((x - grid.ox) / grid.cell), r = Math.floor((y - grid.oy) / grid.cell);
+  return c < 0 || r < 0 || c >= grid.cols || r >= grid.rows ? -1 : r * grid.cols + c;
+};
+export const walkable = (grid, x, y) => { const i = cellAt(grid, x, y); return i >= 0 && !grid.blocked[i]; };
+
+// Free cells in a ring just outside a building's blocked cells: its "doors" onto the street.
+function doors(grid, b) {
+  const out = [], reach = grid.cell + 1;
+  // Blocked cells that belong to this building (its grown footprint), not a neighbour's.
+  const inside = (c, r) => {
+    const x = grid.ox + (c + .5) * grid.cell, y = grid.oy + (r + .5) * grid.cell, half = grid.cell / 2 + .5;
+    return x > b.x - half && x < b.x + b.w + half && y > b.y - half && y < b.y + b.h + half;
+  };
+  const c0 = Math.max(0, Math.floor((b.x - reach - grid.ox) / grid.cell)), c1 = Math.min(grid.cols - 1, Math.floor((b.x + b.w + reach - grid.ox) / grid.cell));
+  const r0 = Math.max(0, Math.floor((b.y - reach - grid.oy) / grid.cell)), r1 = Math.min(grid.rows - 1, Math.floor((b.y + b.h + reach - grid.oy) / grid.cell));
+  for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
+    const i = r * grid.cols + c;
+    if (grid.blocked[i]) continue;
+    const touches = (cc, rr) => cc >= 0 && rr >= 0 && cc < grid.cols && rr < grid.rows && grid.blocked[rr * grid.cols + cc] && inside(cc, rr);
+    if (touches(c - 1, r) || touches(c + 1, r) || touches(c, r - 1) || touches(c, r + 1)) out.push(i);
+  }
+  return out;
+}
+
+class MinHeap {
+  constructor() { this.keys = []; this.items = []; }
+  get size() { return this.items.length; }
+  push(item, key) {
+    const k = this.keys, it = this.items; let i = it.length; k.push(key); it.push(item);
+    while (i > 0) { const p = (i - 1) >> 1; if (k[p] <= key) break; k[i] = k[p]; it[i] = it[p]; i = p; }
+    k[i] = key; it[i] = item;
+  }
+  pop() {
+    const k = this.keys, it = this.items, top = it[0], key = k.pop(), item = it.pop();
+    if (it.length) {
+      let i = 0;
+      for (;;) { let c = 2 * i + 1; if (c >= it.length) break; if (c + 1 < it.length && k[c + 1] < k[c]) c++; if (k[c] >= key) break; k[i] = k[c]; it[i] = it[c]; i = c; }
+      k[i] = key; it[i] = item;
+    }
+    return top;
+  }
+}
+
+// Straight line between two points stays on walkable cells (sampled at half-cell steps).
+function clearLine(grid, a, b) {
+  const steps = Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / (grid.cell * .5));
+  for (let s = 1; s < steps; s++) if (!walkable(grid, a[0] + (b[0] - a[0]) * s / steps, a[1] + (b[1] - a[1]) * s / steps)) return false;
+  return true;
+}
+
+// Keeps only the turns a walker needs: each point jumps as far ahead as it can see in a straight line.
+export function simplifyRoute(grid, points) {
+  if (points.length < 3) return points;
+  // Scans forward and stops at the first obstruction, so each turn costs about its street's length.
+  const out = [points[0]];
+  let i = 0;
+  while (i < points.length - 1) {
+    let j = i + 1;
+    while (j + 1 < points.length && clearLine(grid, points[i], points[j + 1])) j++;
+    out.push(points[j]); i = j;
+  }
+  return out;
+}
+
+// Street routes from one building to each target building: one Dijkstra pass from the source's
+// doors that stops once every target door is settled. Returns an array aligned with `targets`
+// holding point lists (metres), or null where a target cannot be reached.
+export function routesFrom(grid, source, targets) {
+  const { cols, rows, blocked, cost } = grid, n = cols * rows;
+  // Float64: float32 distances round up, so equal paths look like improvements and flood the queue.
+  const distance = new Float64Array(n).fill(Infinity), parent = new Int32Array(n).fill(-1), heap = new MinHeap();
+  for (const door of doors(grid, source)) { distance[door] = 0; heap.push(door, 0); }
+  const settled = new Uint8Array(n);
+  const goals = targets.map(t => new Set(doors(grid, t)));
+  const reached = targets.map(() => -1);
+  let remaining = targets.length;
+  const neighbours = [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, Math.SQRT2], [1, -1, Math.SQRT2], [-1, 1, Math.SQRT2], [-1, -1, Math.SQRT2]];
+  while (heap.size && remaining) {
+    const i = heap.pop();
+    if (settled[i]) continue; // a stale, longer queue entry
+    settled[i] = 1;
+    const d = distance[i];
+    for (let t = 0; t < goals.length; t++) if (reached[t] < 0 && goals[t].has(i)) { reached[t] = i; remaining--; }
+    const c = i % cols, r = (i - c) / cols;
+    for (const [dc, dr, step] of neighbours) {
+      const nc = c + dc, nr = r + dr;
+      if (nc < 0 || nr < 0 || nc >= cols || nr >= rows) continue;
+      const j = nr * cols + nc;
+      // No corner cutting: a diagonal needs both orthogonal neighbours free.
+      if (blocked[j] || (dc && dr && (blocked[r * cols + nc] || blocked[nr * cols + c]))) continue;
+      const next = d + step * (cost[i] + cost[j]) / 2;
+      if (next < distance[j]) { distance[j] = next; parent[j] = i; heap.push(j, next); }
+    }
+  }
+  // Buildings boxed in by their neighbours have no door on a street: end at the reachable
+  // street cell nearest the building instead.
+  for (let t = 0; t < targets.length; t++) {
+    if (reached[t] >= 0) continue;
+    const b = targets[t], cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+    let best = Infinity;
+    for (let i = 0; i < n; i++) {
+      if (!settled[i]) continue;
+      const [x, y] = cellCenter(grid, i), d = (x - cx) ** 2 + (y - cy) ** 2;
+      if (d < best) { best = d; reached[t] = i; }
+    }
+  }
+  return reached.map(end => {
+    if (end < 0) return null;
+    const cells = [];
+    for (let i = end; i >= 0; i = parent[i]) cells.push(cellCenter(grid, i));
+    return simplifyRoute(grid, cells.reverse());
+  });
+}

@@ -219,6 +219,41 @@ void main(){
 }`;
 const TRAIL_FLOATS = 9;
 
+// Street routes: flat ribbons on the road with chevrons flowing toward the destination.
+const ROUTE_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aAcrossAlongKind;
+uniform mat4 uViewProj;
+out vec2 vAcrossAlong;
+out float vDepth;
+flat out int vKind;
+void main(){
+  vAcrossAlong = aAcrossAlongKind.xy; vKind = int(aAcrossAlongKind.z + .5);
+  gl_Position = uViewProj * vec4(aPos, 1.0);
+  vDepth = gl_Position.w;
+}`;
+
+const ROUTE_FS = `#version 300 es
+precision highp float;
+in vec2 vAcrossAlong;
+in float vDepth;
+flat in int vKind;
+uniform float uTime;
+uniform float uFogDensity;
+out vec4 outColor;
+void main(){
+  vec3 color = vKind == 0 ? vec3(.21, .83, .76) : vec3(.97, .74, .3);
+  float across = abs(vAcrossAlong.x);
+  // Chevron tips lead: the phase grows toward the centre line, and time moves it forward.
+  float phase = fract(vAcrossAlong.y * .22 + across * .35 - uTime * 1.4);
+  float chevron = smoothstep(0.0, .06, phase) * (1.0 - smoothstep(.22, .32, phase));
+  float body = 1.0 - smoothstep(.7, 1.0, across);
+  float glow = body * (.16 + .95 * chevron) * exp(-pow(vDepth * uFogDensity, 2.0));
+  outColor = vec4(color * glow, 0.0);
+}`;
+const ROUTE_FLOATS = 6;
+
 const SIGN_FS = `#version 300 es
 precision highp float;
 in vec2 vUv;
@@ -284,6 +319,10 @@ export class LandscapeRenderer {
     gl.bindVertexArray(this.trailLayer.vao); gl.bindBuffer(gl.ARRAY_BUFFER, this.trailLayer.buffer);
     [[0, 0], [1, 12], [2, 24]].forEach(([index, offset]) => { gl.enableVertexAttribArray(index); gl.vertexAttribPointer(index, 3, gl.FLOAT, false, TRAIL_FLOATS * 4, offset); });
     this.beaconLayer = this.boxLayer();
+    this.routeProgram = program(gl, ROUTE_VS, ROUTE_FS); this.routeUniforms = uniformsOf(gl, this.routeProgram);
+    this.routeLayer = { vao: gl.createVertexArray(), buffer: gl.createBuffer(), count: 0 };
+    gl.bindVertexArray(this.routeLayer.vao); gl.bindBuffer(gl.ARRAY_BUFFER, this.routeLayer.buffer);
+    [[0, 0], [1, 12]].forEach(([index, offset]) => { gl.enableVertexAttribArray(index); gl.vertexAttribPointer(index, 3, gl.FLOAT, false, ROUTE_FLOATS * 4, offset); });
     this.time = 0;
     this.camera = { x: 500, y: 350, zoom: 1, yaw: -.1, pitch: .78, distance: 3.5 };
     // City camera: 'heli' orbits a ground target; 'walk' and 'fly' look out from an eye position.
@@ -366,6 +405,26 @@ export class LandscapeRenderer {
     this.trailLayer.count = vertices.length / TRAIL_FLOATS;
   }
 
+  // routes: [{ points: [[x,y], ...], kind }] drawn on the ground from first point to last.
+  setRoutes(routes, width = 1.6, z = .45) {
+    const vertices = [];
+    for (const route of routes) {
+      let along = 0;
+      for (let i = 1; i < route.points.length; i++) {
+        const [ax, ay] = route.points[i - 1], [bx, by] = route.points[i], length = Math.hypot(bx - ax, by - ay);
+        if (length < 1e-3) continue;
+        // Each segment runs half a width past both ends so corners overlap instead of leaving notches.
+        const dx = (bx - ax) / length, dy = (by - ay) / length, nx = -dy * width / 2, ny = dx * width / 2, ex = dx * width / 2, ey = dy * width / 2;
+        const p0 = [ax - ex, ay - ey], p1 = [bx + ex, by + ey], a0 = along - width / 2, a1 = along + length + width / 2;
+        const v = (p, side, a) => vertices.push(p[0] + nx * side, p[1] + ny * side, z, side, a, route.kind);
+        v(p0, -1, a0); v(p0, 1, a0); v(p1, 1, a1); v(p0, -1, a0); v(p1, 1, a1); v(p1, -1, a1);
+        along += length;
+      }
+    }
+    const gl = this.gl; gl.bindBuffer(gl.ARRAY_BUFFER, this.routeLayer.buffer); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.DYNAMIC_DRAW);
+    this.routeLayer.count = vertices.length / ROUTE_FLOATS;
+  }
+
   // beams: [{ x, y, w, h, height, color }] rising from search hits.
   setBeacons(beams) {
     const packed = new Float32Array(beams.length * FLOATS_PER_INSTANCE);
@@ -373,7 +432,7 @@ export class LandscapeRenderer {
     this.upload(this.beaconLayer, packed);
   }
 
-  get animating() { return this.mode === 'city' && this.trailLayer.count > 0; }
+  get animating() { return this.mode === 'city' && (this.trailLayer.count > 0 || this.routeLayer.count > 0); }
 
   syncAtlas() {
     const gl = this.gl, atlas = this.atlas; if (!atlas) return;
@@ -522,6 +581,14 @@ export class LandscapeRenderer {
       // Light effects add colour and never occlude: additive blending without depth writes.
       gl.depthMask(false); gl.blendFunc(gl.ONE, gl.ONE);
       if (this.beaconLayer.count) { gl.bindVertexArray(this.beaconLayer.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, this.beaconLayer.count); }
+      if (this.routeLayer.count) {
+        const r = this.routeUniforms;
+        gl.useProgram(this.routeProgram); gl.bindVertexArray(this.routeLayer.vao);
+        gl.uniformMatrix4fv(r.uViewProj, false, this.viewProj); gl.uniform1f(r.uTime, performance.now() / 1000); gl.uniform1f(r.uFogDensity, fog);
+        gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-1, -4);
+        gl.drawArrays(gl.TRIANGLES, 0, this.routeLayer.count);
+        gl.disable(gl.POLYGON_OFFSET_FILL);
+      }
       if (this.trailLayer.count) {
         const t = this.trailUniforms;
         gl.useProgram(this.trailProgram); gl.bindVertexArray(this.trailLayer.vao);

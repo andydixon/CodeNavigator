@@ -1,5 +1,5 @@
 import { LandscapeRenderer, KIND } from './renderer.js';
-import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, flatQuad, wallSigns, folderBlades, folderLabel, facadeQuad, heading, tourStops, encodePlace, decodePlace, joystick, buildNavGrid, routesFrom, MOVE } from './city.js';
+import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, flatQuad, wallSigns, folderBlades, folderLabel, facadeQuad, heading, tourStops, encodePlace, decodePlace, joystick, buildNavGrid, routesFrom, spawnWanderers, stepWanderers, MOVE } from './city.js';
 import { LabelAtlas } from './labels.js';
 import { apiFetch, progressEvents } from './api.mjs';
 
@@ -46,7 +46,7 @@ let searchHits=[];
 let expandedCoverageLayer=null;
 let coverageActiveIndex=-1;
 let cameraAnimation=null;
-let cityModel=null,cityEntries=[],cityIndex=null,cityFitted=false,cityDistricts=[],cityFolders=[],navGrid=null,cityRoutes=[];
+let cityModel=null,cityEntries=[],cityIndex=null,cityFitted=false,cityDistricts=[],cityFolders=[],navGrid=null,cityRoutes=[],wanderers=[],showResidents=true;
 let currentSnapshot=null;
 let currentName='';
 let currentMetric='lines';
@@ -129,6 +129,7 @@ function computeCity(){
   }
   cityIndex=spatialIndex(cityEntries);
   navGrid=buildNavGrid(cityEntries,cityModel.blocks,cityModel);
+  spawnResidents();
   // Each folder's own buildings (not its subfolders'), for street-corner signs.
   const byDirectory=new Map();
   for(const b of cityEntries){const list=byDirectory.get(b.file.directory||'');if(list)list.push(b);else byDirectory.set(b.file.directory||'',[b]);}
@@ -778,6 +779,19 @@ function updateRoutes(){
   renderer.setRoutes(cityRoutes);dirty=true;
 }
 
+// Residents: roughly one per 2,500 m² of city, capped so large repos stay cheap to simulate.
+function spawnResidents(){
+  wanderers=showResidents&&navGrid?spawnWanderers(navGrid,Math.max(40,Math.min(600,Math.round(cityModel.width*cityModel.height/2500))),Math.random,cityModel):[];
+  if(!wanderers.length)renderer.setWanderers(new Float32Array(0));
+}
+let residentBuffer=new Float32Array(0);
+function updateResidents(seconds){
+  stepWanderers(wanderers,navGrid,seconds);
+  if(residentBuffer.length!==wanderers.length*4)residentBuffer=new Float32Array(wanderers.length*4);
+  wanderers.forEach((w,i)=>residentBuffer.set([w.x,w.y,w.phase,w.seed],i*4));
+  renderer.setWanderers(residentBuffer);
+}
+
 // Search hits become light columns visible across the city.
 function updateBeacons(){
   if(!cityModel){renderer.setBeacons([]);return;}
@@ -996,6 +1010,7 @@ function animate(now){
   const frameSeconds=Math.min(.1,(now-lastFrame)/1000);
   if(renderer.mode==='city'&&renderer.city.view!=='heli'&&!cameraAnimation&&(heldKeys.size||touchMove.forward||touchMove.right))stepCity(frameSeconds);
   if(tour)advanceTour(now,frameSeconds);
+  if(renderer.mode==='city'&&wanderers.length)updateResidents(frameSeconds);
   if(cameraAnimation){
     const progress=Math.min(1,(now-cameraAnimation.start)/cameraAnimation.duration),eased=1-(1-progress)**4;
     for(const key of Object.keys(cameraAnimation.to))cameraAnimation.camera[key]=cameraAnimation.from[key]+(cameraAnimation.to[key]-cameraAnimation.from[key])*eased;
@@ -1088,7 +1103,7 @@ $('#paletteButton').addEventListener('click',()=>{paletteIndex=(paletteIndex+1)%
 const settingsDialog=$('#settingsDialog');
 $('#settingsButton').addEventListener('click',()=>{
   $('#settingsContent').innerHTML=`<div class="settings-status"><span><i></i>Workspace preferences</span><small>${renderer.mode.toUpperCase()} VIEW</small></div>`;
-  $('#paletteSelect').value=String(paletteIndex);$('#sourceToggle').checked=showCode;$('#fpsToggle').checked=!$('#fps').hidden;
+  $('#paletteSelect').value=String(paletteIndex);$('#sourceToggle').checked=showCode;$('#fpsToggle').checked=!$('#fps').hidden;$('#residentsToggle').checked=showResidents;
   if(!settingsDialog.open)settingsDialog.showModal();
 });
 settingsDialog.addEventListener('click',event=>{if(event.target===settingsDialog)settingsDialog.close();});
@@ -1217,12 +1232,13 @@ async function checkBackend(){
 }
 
 // Preferences stay on this device and never contain repository or server details.
-function savePreferences(){try{localStorage.setItem('codenavigator.preferences',JSON.stringify({palette:paletteIndex,source:showCode,fps:!$('#fps').hidden}));}catch{}}
-try{const saved=JSON.parse(localStorage.getItem('codenavigator.preferences')||'{}');if(Number.isInteger(saved.palette)&&saved.palette>=0&&saved.palette<palettes.length)paletteIndex=saved.palette;if(typeof saved.source==='boolean')showCode=saved.source;$('#fps').hidden=saved.fps!==true;}catch{$('#fps').hidden=true;}
+function savePreferences(){try{localStorage.setItem('codenavigator.preferences',JSON.stringify({palette:paletteIndex,source:showCode,fps:!$('#fps').hidden,residents:showResidents}));}catch{}}
+try{const saved=JSON.parse(localStorage.getItem('codenavigator.preferences')||'{}');if(Number.isInteger(saved.palette)&&saved.palette>=0&&saved.palette<palettes.length)paletteIndex=saved.palette;if(typeof saved.source==='boolean')showCode=saved.source;if(typeof saved.residents==='boolean')showResidents=saved.residents;$('#fps').hidden=saved.fps!==true;}catch{$('#fps').hidden=true;}
 $('#codeButton').classList.toggle('active',showCode);
 $('#paletteSelect').addEventListener('change',event=>{paletteIndex=Number(event.target.value);computeLayout();buildLegend();renderInspector();renderHistory();savePreferences();});
 $('#sourceToggle').addEventListener('change',event=>{showCode=event.target.checked;$('#codeButton').classList.toggle('active',showCode);dirty=true;savePreferences();});
 $('#fpsToggle').addEventListener('change',event=>{$('#fps').hidden=!event.target.checked;savePreferences();});
+$('#residentsToggle').addEventListener('change',event=>{showResidents=event.target.checked;if(cityModel)spawnResidents();dirty=true;savePreferences();});
 $('#paletteButton').addEventListener('click',savePreferences);$('#codeButton').addEventListener('click',savePreferences);
 $('#dismissProgress').addEventListener('click',()=>{$('#progressCard').hidden=true;});
 $('#fitButton').addEventListener('click',fitScene);

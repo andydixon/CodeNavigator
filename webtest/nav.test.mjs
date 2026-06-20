@@ -57,3 +57,26 @@ test('routing a large generated city stays fast (guards against queue flooding)'
   assert.ok(routes.every(Boolean), 'every building in a connected city is reachable');
   routes.forEach(route => { for (const [x, y] of route) assert.ok(walkable(grid, x, y)); });
 });
+
+import { spawnWanderers, stepWanderers, seededRandom } from '../web/city.js';
+
+test('wanderers spawn and stay on walkable ground while they roam', () => {
+  const grid = buildNavGrid([a, b, wall], [], bounds), random = seededRandom(7);
+  const crowd = spawnWanderers(grid, 60, random);
+  assert.equal(crowd.length, 60);
+  const start = crowd.map(w => [w.x, w.y]);
+  for (let frame = 0; frame < 900; frame++) {
+    stepWanderers(crowd, grid, 1 / 30, random);
+    if (frame % 30 === 0) for (const w of crowd) assert.ok(walkable(grid, w.x, w.y), `walker at ${w.x},${w.y}`);
+  }
+  const moved = crowd.filter((w, i) => Math.hypot(w.x - start[i][0], w.y - start[i][1]) > 3).length;
+  assert.ok(moved > 40, `most walkers wandered off (${moved})`);
+  assert.ok(crowd.every(w => Number.isFinite(w.phase)));
+  assert.ok(spawnWanderers(grid, 30, random, { width: 20, height: 20 }).every(w => w.x >= 0 && w.x <= 20 && w.y >= 0 && w.y <= 20), 'spawns inside the city bounds');
+});
+
+test('a seeded crowd is reproducible', () => {
+  const grid = buildNavGrid([a], [], bounds);
+  const run = () => { const r = seededRandom(3), c = spawnWanderers(grid, 10, r); for (let i = 0; i < 100; i++) stepWanderers(c, grid, .05, r); return c.map(w => [w.x.toFixed(3), w.y.toFixed(3)]); };
+  assert.deepEqual(run(), run());
+});

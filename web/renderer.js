@@ -254,6 +254,56 @@ void main(){
 }`;
 const ROUTE_FLOATS = 6;
 
+// Residents: camera-facing sprites drawn procedurally as glowing stick figures with a walk cycle.
+const WANDERER_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 aCorner;
+layout(location=1) in vec4 aPosPhaseSeed;
+uniform mat4 uViewProj;
+uniform vec2 uRight;
+uniform float uScale;
+out vec2 vLocal;
+out float vPhase;
+out float vDepth;
+flat out float vSeed;
+const vec2 SIZE = vec2(.5, 1.35);
+void main(){
+  vLocal = vec2(aCorner.x * 2.0 - 1.0, aCorner.y) * SIZE;
+  vPhase = aPosPhaseSeed.z; vSeed = aPosPhaseSeed.w;
+  vec3 world = vec3(aPosPhaseSeed.xy + uRight * vLocal.x * uScale, vLocal.y * uScale);
+  gl_Position = uViewProj * vec4(world, 1.0);
+  vDepth = gl_Position.w;
+}`;
+
+const WANDERER_FS = `#version 300 es
+precision highp float;
+in vec2 vLocal;
+in float vPhase;
+in float vDepth;
+flat in float vSeed;
+uniform float uTime;
+uniform float uFogDensity;
+out vec4 outColor;
+float segment(vec2 p, vec2 a, vec2 b){ vec2 pa = p - a, ba = b - a; return length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0)); }
+void main(){
+  vec2 p = vLocal;
+  float swing = sin(vPhase), bob = abs(cos(vPhase)) * .03;
+  vec2 hip = vec2(0.0, .5 + bob), neck = vec2(0.0, .92 + bob);
+  float d = length(p - vec2(0.0, 1.08 + bob)) - .1;                        // head
+  d = min(d, segment(p, hip, neck) - .045);                                // body
+  d = min(d, segment(p, neck - vec2(0.0, .06), vec2(-.26, .66 + swing * .1 + bob)) - .03); // arms
+  d = min(d, segment(p, neck - vec2(0.0, .06), vec2(.26, .66 - swing * .1 + bob)) - .03);
+  d = min(d, segment(p, hip, vec2(-.16 * swing - .04, 0.0)) - .035);        // legs
+  d = min(d, segment(p, hip, vec2(.16 * swing + .04, 0.0)) - .035);
+  float aa = fwidth(d) + .002;
+  float body = 1.0 - smoothstep(0.0, aa, d), halo = exp(-max(d, 0.0) * 18.0) * .35;
+  float flicker = .85 + .15 * sin(uTime * 7.0 + vSeed * 40.0);
+  vec3 green = vec3(.32, 1.0, .38) * flicker;
+  float fog = exp(-pow(vDepth * uFogDensity, 2.0));
+  if(body + halo < .01) discard;
+  outColor = vec4(green * (body + halo) * fog, 0.0);
+}`;
+
 const SIGN_FS = `#version 300 es
 precision highp float;
 in vec2 vUv;
@@ -320,6 +370,11 @@ export class LandscapeRenderer {
     [[0, 0], [1, 12], [2, 24]].forEach(([index, offset]) => { gl.enableVertexAttribArray(index); gl.vertexAttribPointer(index, 3, gl.FLOAT, false, TRAIL_FLOATS * 4, offset); });
     this.beaconLayer = this.boxLayer();
     this.routeProgram = program(gl, ROUTE_VS, ROUTE_FS); this.routeUniforms = uniformsOf(gl, this.routeProgram);
+    this.wandererProgram = program(gl, WANDERER_VS, WANDERER_FS); this.wandererUniforms = uniformsOf(gl, this.wandererProgram);
+    this.wandererLayer = { vao: gl.createVertexArray(), buffer: gl.createBuffer(), count: 0 };
+    gl.bindVertexArray(this.wandererLayer.vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.corners); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.wandererLayer.buffer); gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 16, 0); gl.vertexAttribDivisor(1, 1);
     this.routeLayer = { vao: gl.createVertexArray(), buffer: gl.createBuffer(), count: 0 };
     gl.bindVertexArray(this.routeLayer.vao); gl.bindBuffer(gl.ARRAY_BUFFER, this.routeLayer.buffer);
     [[0, 0], [1, 12]].forEach(([index, offset]) => { gl.enableVertexAttribArray(index); gl.vertexAttribPointer(index, 3, gl.FLOAT, false, ROUTE_FLOATS * 4, offset); });
@@ -425,6 +480,12 @@ export class LandscapeRenderer {
     this.routeLayer.count = vertices.length / ROUTE_FLOATS;
   }
 
+  // Resident positions as packed [x, y, phase, seed] per figure; called every frame while they walk.
+  setWanderers(packed) {
+    const gl = this.gl; gl.bindBuffer(gl.ARRAY_BUFFER, this.wandererLayer.buffer); gl.bufferData(gl.ARRAY_BUFFER, packed, gl.DYNAMIC_DRAW);
+    this.wandererLayer.count = packed.length / 4;
+  }
+
   // beams: [{ x, y, w, h, height, color }] rising from search hits.
   setBeacons(beams) {
     const packed = new Float32Array(beams.length * FLOATS_PER_INSTANCE);
@@ -432,7 +493,7 @@ export class LandscapeRenderer {
     this.upload(this.beaconLayer, packed);
   }
 
-  get animating() { return this.mode === 'city' && (this.trailLayer.count > 0 || this.routeLayer.count > 0); }
+  get animating() { return this.mode === 'city' && (this.trailLayer.count > 0 || this.routeLayer.count > 0 || this.wandererLayer.count > 0); }
 
   syncAtlas() {
     const gl = this.gl, atlas = this.atlas; if (!atlas) return;
@@ -581,6 +642,15 @@ export class LandscapeRenderer {
       // Light effects add colour and never occlude: additive blending without depth writes.
       gl.depthMask(false); gl.blendFunc(gl.ONE, gl.ONE);
       if (this.beaconLayer.count) { gl.bindVertexArray(this.beaconLayer.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, this.beaconLayer.count); }
+      if (this.wandererLayer.count) {
+        const w = this.wandererUniforms, f = this.forward, len = Math.hypot(f[0], f[1]) || 1, c = this.city;
+        gl.useProgram(this.wandererProgram); gl.bindVertexArray(this.wandererLayer.vao);
+        gl.uniformMatrix4fv(w.uViewProj, false, this.viewProj); gl.uniform2f(w.uRight, -f[1] / len, f[0] / len);
+        // From the air they'd be sub-pixel; grow them so crowds read as drifting green specks.
+        gl.uniform1f(w.uScale, c.view === 'heli' ? Math.min(6, Math.max(1, c.distance / 250)) : c.view === 'fly' ? Math.min(4, Math.max(1, c.ez / 120)) : 1);
+        gl.uniform1f(w.uTime, performance.now() / 1000); gl.uniform1f(w.uFogDensity, fog);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.wandererLayer.count);
+      }
       if (this.routeLayer.count) {
         const r = this.routeUniforms;
         gl.useProgram(this.routeProgram); gl.bindVertexArray(this.routeLayer.vao);

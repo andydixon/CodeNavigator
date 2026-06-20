@@ -439,7 +439,7 @@ class MinHeap {
 }
 
 // Straight line between two points stays on walkable cells (sampled at half-cell steps).
-function clearLine(grid, a, b) {
+export function clearLine(grid, a, b) {
   const steps = Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / (grid.cell * .5));
   for (let s = 1; s < steps; s++) if (!walkable(grid, a[0] + (b[0] - a[0]) * s / steps, a[1] + (b[1] - a[1]) * s / steps)) return false;
   return true;
@@ -507,4 +507,49 @@ export function routesFrom(grid, source, targets) {
     for (let i = end; i >= 0; i = parent[i]) cells.push(cellCenter(grid, i));
     return simplifyRoute(grid, cells.reverse());
   });
+}
+
+// Wandering residents: little figures that stroll between points they can see, pause, and often
+// drift toward one another so they gather in small crowds.
+export function spawnWanderers(grid, count, random = Math.random, bounds = null) {
+  const out = [];
+  for (let tries = 0; out.length < count && tries < count * 50; tries++) {
+    const i = Math.floor(random() * grid.cols * grid.rows);
+    if (grid.blocked[i]) continue;
+    const [x, y] = cellCenter(grid, i);
+    if (bounds && (x < 0 || y < 0 || x > bounds.width || y > bounds.height)) continue; // streets, not the empty margin
+    out.push({ x, y, tx: x, ty: y, speed: .9 + random() * .9, phase: random() * 6.28, pause: random() * 3, seed: random() });
+  }
+  return out;
+}
+
+function chooseTarget(w, all, grid, random) {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    let tx, ty;
+    const friend = random() < .35 ? all[Math.floor(random() * all.length)] : null;
+    if (friend && friend !== w && Math.hypot(friend.x - w.x, friend.y - w.y) < 45) {
+      tx = friend.x + (random() - .5) * 4; ty = friend.y + (random() - .5) * 4;
+    } else {
+      const angle = random() * Math.PI * 2, distance = 6 + random() * 34;
+      tx = w.x + Math.cos(angle) * distance; ty = w.y + Math.sin(angle) * distance;
+    }
+    if (walkable(grid, tx, ty) && clearLine(grid, [w.x, w.y], [tx, ty])) { w.tx = tx; w.ty = ty; return; }
+  }
+  w.pause = .5 + random() * 1.5; // boxed in for now; look around and try again
+}
+
+export function stepWanderers(all, grid, dt, random = Math.random) {
+  for (const w of all) {
+    if (w.pause > 0) { w.pause -= dt; if (w.pause <= 0) chooseTarget(w, all, grid, random); continue; }
+    const dx = w.tx - w.x, dy = w.ty - w.y, distance = Math.hypot(dx, dy), step = Math.min(distance, w.speed * dt);
+    if (distance < .3) { w.pause = random() < .5 ? random() * 3 : 0; if (w.pause <= 0) chooseTarget(w, all, grid, random); continue; }
+    const nx = w.x + dx / distance * step, ny = w.y + dy / distance * step;
+    if (!walkable(grid, nx, ny)) { chooseTarget(w, all, grid, random); continue; }
+    w.x = nx; w.y = ny; w.phase += step * 3.2; // stride cycles per metre
+  }
+}
+
+// Deterministic generator for tests and reproducible crowds.
+export function seededRandom(seed) {
+  return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
 }

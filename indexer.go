@@ -48,6 +48,7 @@ type Edge struct {
 type Snapshot struct {
 	ID, Name, Source string
 	Owner            string // session that created the snapshot
+	Repo             string // GitHub repository URL, empty for local folders
 	Files            []FileRecord
 	Edges            []Edge
 	TotalLines       int

@@ -7,11 +7,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -228,4 +230,149 @@ func (g githubApp) cloneFailure(output string, signedIn bool) (message string, a
 	default:
 		return "Your GitHub account cannot open this repository through CodeNavigator. Grant the app access to it, then try again.", "install"
 	}
+}
+
+// Security alert on a file, normalised across code scanning and Dependabot.
+type securityAlert struct {
+	Path     string `json:"path"`
+	Title    string `json:"title"`
+	Severity string `json:"severity"` // critical, high, medium or low
+	URL      string `json:"url"`
+	Line     int    `json:"line,omitempty"`
+}
+
+type alertSet struct {
+	Status string          `json:"status"` // ok, forbidden (no permission or feature off), unavailable
+	Alerts []securityAlert `json:"alerts"`
+}
+
+// serveAlerts reports open code scanning and Dependabot alerts for a snapshot's repository,
+// fetched with the viewer's own GitHub token so they only ever see what they are allowed to.
+func (s *Server) serveAlerts(w http.ResponseWriter, r *http.Request, repo string) {
+	ownerRepo, ok := strings.CutPrefix(repo, "https://github.com/")
+	if !ok || repo == "" {
+		writeJSON(w, 200, map[string]any{"available": false, "reason": "not-github"})
+		return
+	}
+	token := s.githubAuthFor(sessionID(nil, r)).token
+	if !s.github.configured() || token == "" {
+		writeJSON(w, 200, map[string]any{"available": false, "reason": "signin"})
+		return
+	}
+	var codeScanning, dependabot alertSet
+	var wg sync.WaitGroup
+	wg.Go(func() { codeScanning = s.github.codeScanningAlerts(ownerRepo, token) })
+	wg.Go(func() { dependabot = s.github.dependabotAlerts(ownerRepo, token) })
+	wg.Wait()
+	writeJSON(w, 200, map[string]any{"available": true, "codeScanning": codeScanning, "dependabot": dependabot})
+}
+
+type codeScanningAlert struct {
+	HTMLURL string `json:"html_url"`
+	Rule    struct {
+		ID                    string `json:"id"`
+		Severity              string `json:"severity"`
+		SecuritySeverityLevel string `json:"security_severity_level"`
+		Description           string `json:"description"`
+	} `json:"rule"`
+	Instance struct {
+		Location struct {
+			Path      string `json:"path"`
+			StartLine int    `json:"start_line"`
+		} `json:"location"`
+	} `json:"most_recent_instance"`
+}
+
+func (g githubApp) codeScanningAlerts(ownerRepo, token string) alertSet {
+	raw, status := fetchPages[codeScanningAlert](g, "/repos/"+ownerRepo+"/code-scanning/alerts?state=open&per_page=100", token)
+	set := alertSet{Status: status, Alerts: []securityAlert{}}
+	for _, a := range raw {
+		severity := strings.ToLower(a.Rule.SecuritySeverityLevel)
+		if severity == "" {
+			severity = map[string]string{"error": "high", "warning": "medium", "note": "low"}[strings.ToLower(a.Rule.Severity)]
+		}
+		title := a.Rule.Description
+		if title == "" {
+			title = a.Rule.ID
+		}
+		set.Alerts = append(set.Alerts, securityAlert{a.Instance.Location.Path, title, orLow(severity), a.HTMLURL, a.Instance.Location.StartLine})
+	}
+	return set
+}
+
+type dependabotAlert struct {
+	HTMLURL    string `json:"html_url"`
+	Dependency struct {
+		Package struct {
+			Name string `json:"name"`
+		} `json:"package"`
+		ManifestPath string `json:"manifest_path"`
+	} `json:"dependency"`
+	Advisory struct {
+		Summary  string `json:"summary"`
+		Severity string `json:"severity"`
+	} `json:"security_advisory"`
+}
+
+func (g githubApp) dependabotAlerts(ownerRepo, token string) alertSet {
+	raw, status := fetchPages[dependabotAlert](g, "/repos/"+ownerRepo+"/dependabot/alerts?state=open&per_page=100", token)
+	set := alertSet{Status: status, Alerts: []securityAlert{}}
+	for _, a := range raw {
+		title := a.Dependency.Package.Name
+		if a.Advisory.Summary != "" {
+			title += ": " + a.Advisory.Summary
+		}
+		set.Alerts = append(set.Alerts, securityAlert{a.Dependency.ManifestPath, title, orLow(strings.ToLower(a.Advisory.Severity)), a.HTMLURL, 0})
+	}
+	return set
+}
+
+func orLow(severity string) string {
+	switch severity {
+	case "critical", "high", "medium", "low":
+		return severity
+	}
+	return "low"
+}
+
+// fetchPages decodes every page of a GitHub list endpoint, following Link rel="next" only while it
+// stays on the API host, up to 10 pages. Status is ok, forbidden (no permission or feature off) or
+// unavailable (404, network or decode failure).
+func fetchPages[T any](g githubApp, path, token string) ([]T, string) {
+	var all []T
+	next := g.apiURL + path
+	for page := 0; next != "" && page < 10; page++ {
+		req, _ := http.NewRequest("GET", next, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+		res, err := githubClient.Do(req)
+		if err != nil {
+			return all, "unavailable"
+		}
+		var items []T
+		decodeErr := json.NewDecoder(io.LimitReader(res.Body, 32<<20)).Decode(&items)
+		res.Body.Close()
+		switch {
+		case res.StatusCode == 401 || res.StatusCode == 403:
+			return all, "forbidden"
+		case res.StatusCode != 200 || decodeErr != nil:
+			return all, "unavailable"
+		}
+		all = append(all, items...)
+		if next = nextLink(res.Header.Get("Link")); !strings.HasPrefix(next, g.apiURL+"/") {
+			next = ""
+		}
+	}
+	return all, "ok"
+}
+
+func nextLink(header string) string {
+	for part := range strings.SplitSeq(header, ",") {
+		target, rel, ok := strings.Cut(part, ";")
+		if ok && strings.Contains(rel, `rel="next"`) {
+			return strings.Trim(strings.TrimSpace(target), "<>")
+		}
+	}
+	return ""
 }

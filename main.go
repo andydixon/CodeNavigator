@@ -42,6 +42,7 @@ type Job struct {
 	// AuthRequired is "signin" or "install" when GitHub access would fix a failed clone.
 	AuthRequired string `json:"authRequired,omitempty"`
 	root         string
+	repo         string    // https://github.com/owner/repo for GitHub jobs
 	owner        string    // session that created the job
 	updated      time.Time // last progress, used to expire abandoned jobs
 }
@@ -181,7 +182,7 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
-	job := &Job{ID: id, SourceKind: request.Kind, Name: "Local codebase", Phase: "receiving", Message: "Waiting for files…", Warnings: []string{}, root: root, owner: owner, updated: time.Now()}
+	job := &Job{ID: id, SourceKind: request.Kind, Name: "Local codebase", Phase: "receiving", Message: "Waiting for files…", Warnings: []string{}, root: root, owner: owner, updated: time.Now(), repo: url}
 	if request.Name != nil {
 		job.Name = *request.Name
 	}
@@ -317,6 +318,10 @@ func (s *Server) snapshotRoute(w http.ResponseWriter, r *http.Request, parts []s
 			}
 			s.snapshotsMu.Unlock()
 		}
+	case "alerts":
+		repo := snapshot.Repo
+		s.snapshotsMu.Unlock()
+		s.serveAlerts(w, r, repo)
 	case "search":
 		hits := search(snapshot, r.URL.Query().Get("q"))
 		s.snapshotsMu.Unlock()
@@ -568,7 +573,7 @@ func (s *Server) indexJob(id, root string) {
 	}
 	s.jobsMu.Lock()
 	if job := s.jobs[id]; job != nil {
-		snapshot.Name, snapshot.Source, snapshot.Owner = job.Name, job.SourceKind, job.owner
+		snapshot.Name, snapshot.Source, snapshot.Owner, snapshot.Repo = job.Name, job.SourceKind, job.owner, job.repo
 	}
 	s.jobsMu.Unlock()
 	snapshot.ID = uniqueID("snapshot")

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -28,6 +29,23 @@ func fakeGitHub(t *testing.T) *httptest.Server {
 				return
 			}
 			json.NewEncoder(w).Encode(map[string]string{"login": "octocat"})
+		case "/repos/o/r/code-scanning/alerts":
+			if r.Header.Get("Authorization") != "Bearer ghu_token" {
+				w.WriteHeader(401)
+				return
+			}
+			if r.URL.Query().Get("page") == "2" {
+				// A next link off the API host must not be followed (it would leak the token).
+				w.Header().Set("Link", `<https://evil.example/steal>; rel="next"`)
+				json.NewEncoder(w).Encode([]map[string]any{{"html_url": "https://github.com/o/r/security/code-scanning/2", "rule": map[string]any{"id": "go/sql-injection", "severity": "error", "description": "SQL injection"}, "most_recent_instance": map[string]any{"location": map[string]any{"path": "db/query.go", "start_line": 42}}}})
+				return
+			}
+			w.Header().Set("Link", fmt.Sprintf(`<%s/repos/o/r/code-scanning/alerts?page=2>; rel="next", <%s/repos/o/r/code-scanning/alerts?page=2>; rel="last"`, "http://"+r.Host, "http://"+r.Host))
+			json.NewEncoder(w).Encode([]map[string]any{{"html_url": "https://github.com/o/r/security/code-scanning/1", "rule": map[string]any{"id": "js/xss", "severity": "warning", "security_severity_level": "critical", "description": "XSS"}, "most_recent_instance": map[string]any{"location": map[string]any{"path": "web/app.js", "start_line": 7}}}})
+		case "/repos/o/r/dependabot/alerts":
+			w.WriteHeader(403)
+		case "/steal":
+			t.Error("followed a pagination link to another host")
 		default:
 			w.WriteHeader(404)
 		}
@@ -198,5 +216,70 @@ func TestCloneRepo(t *testing.T) {
 	cloneTimeout = time.Nanosecond
 	if out, err := cloneRepo(source, filepath.Join(t.TempDir(), "slow"), ""); err == nil || !strings.HasPrefix(out, "timed out") {
 		t.Fatalf("expired clone = %v %q; want timeout", err, out)
+	}
+}
+
+func signIn(t *testing.T, server *Server, c client, gh *httptest.Server) {
+	t.Helper()
+	server.github = githubApp{clientID: "client", clientSecret: "secret", webURL: gh.URL, apiURL: gh.URL}
+	nr := c.noRedirects()
+	state := nr.location("/api/github/login").Query().Get("state")
+	if got := nr.location("/api/github/callback?code=good&state=" + state).String(); got != "/?github=connected" {
+		t.Fatalf("sign-in failed: %s", got)
+	}
+}
+
+func TestSecurityAlerts(t *testing.T) {
+	server, c := newTestServer(t)
+	gh := fakeGitHub(t)
+	_, snapshot := c.indexLocal(map[string]string{"web/app.js": "x"})
+	url := "/api/snapshots/" + snapshot + "/alerts"
+
+	var body struct {
+		Available    bool
+		Reason       string
+		CodeScanning alertSet
+		Dependabot   alertSet
+	}
+	c.json("GET", url, "", 200, &body)
+	if body.Available || body.Reason != "not-github" {
+		t.Fatalf("local snapshot = %+v", body)
+	}
+
+	server.snapshotsMu.Lock()
+	server.snapshots[snapshot].Repo = "https://github.com/o/r"
+	server.snapshotsMu.Unlock()
+	server.github = githubApp{clientID: "client", clientSecret: "secret", webURL: gh.URL, apiURL: gh.URL}
+	c.json("GET", url, "", 200, &body)
+	if body.Available || body.Reason != "signin" {
+		t.Fatalf("signed out = %+v", body)
+	}
+
+	signIn(t, server, c, gh)
+	c.json("GET", url, "", 200, &body)
+	if !body.Available || body.CodeScanning.Status != "ok" || len(body.CodeScanning.Alerts) != 2 {
+		t.Fatalf("code scanning = %+v", body.CodeScanning)
+	}
+	first, second := body.CodeScanning.Alerts[0], body.CodeScanning.Alerts[1]
+	if first.Path != "web/app.js" || first.Severity != "critical" || first.Line != 7 || second.Path != "db/query.go" || second.Severity != "high" || second.Title != "SQL injection" {
+		t.Fatalf("alerts = %+v", body.CodeScanning.Alerts)
+	}
+	if body.Dependabot.Status != "forbidden" || body.Dependabot.Alerts == nil || len(body.Dependabot.Alerts) != 0 {
+		t.Fatalf("dependabot = %+v", body.Dependabot)
+	}
+	c.stranger().json("GET", url, "", 404, nil)
+}
+
+func TestDependabotAlertsMapToManifests(t *testing.T) {
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode([]map[string]any{
+			{"html_url": "https://github.com/o/r/security/dependabot/3", "dependency": map[string]any{"package": map[string]any{"name": "lodash"}, "manifest_path": "web/package-lock.json"}, "security_advisory": map[string]any{"summary": "Prototype pollution", "severity": "HIGH"}},
+			{"html_url": "https://github.com/o/r/security/dependabot/4", "dependency": map[string]any{"package": map[string]any{"name": "x"}, "manifest_path": "go.mod"}, "security_advisory": map[string]any{"severity": "weird"}},
+		})
+	}))
+	defer gh.Close()
+	set := githubApp{apiURL: gh.URL}.dependabotAlerts("o/r", "t")
+	if set.Status != "ok" || len(set.Alerts) != 2 || set.Alerts[0].Path != "web/package-lock.json" || set.Alerts[0].Severity != "high" || set.Alerts[0].Title != "lodash: Prototype pollution" || set.Alerts[1].Severity != "low" {
+		t.Fatalf("dependabot = %+v", set)
 	}
 }

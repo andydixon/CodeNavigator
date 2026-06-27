@@ -254,6 +254,62 @@ void main(){
 }`;
 const ROUTE_FLOATS = 6;
 
+// Fire and smoke over buildings with security alerts. Particles are stateless: each one's age is
+// derived from time and its seed in the vertex shader, so the CPU only uploads emitters once.
+const FIRE_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 aCorner;
+layout(location=1) in vec4 aEmitter;   // roof centre x, y, z and footprint radius
+layout(location=2) in vec3 aSeedKind;  // seed, kind (0 smoke, 1 flame), emitter scale
+uniform mat4 uViewProj;
+uniform vec3 uRight;
+uniform vec3 uUp;
+uniform float uTime;
+out vec2 vCorner;
+out float vAge;
+flat out int vKind;
+out float vDepth;
+float hash(float n){ return fract(sin(n * 91.3458) * 47453.5453); }
+void main(){
+  float seed = aSeedKind.x, radius = aEmitter.w, scale = aSeedKind.z;
+  vKind = int(aSeedKind.y + .5);
+  float rate = vKind == 1 ? .9 + hash(seed) * .5 : .09 + hash(seed) * .05;
+  float age = fract(uTime * rate + hash(seed + 1.7));
+  vAge = age;
+  float angle = hash(seed + 3.1) * 6.2832, spread = sqrt(hash(seed + 5.3)) * radius * (vKind == 1 ? .75 : .45);
+  vec3 base = aEmitter.xyz + vec3(cos(angle) * spread, sin(angle) * spread, 0.0);
+  vec3 rise = vKind == 1
+    ? vec3(0.0, 0.0, age * (3.0 + radius * .45))
+    : vec3(vec2(1.0, .55) * age * age * (18.0 + radius), age * (28.0 + radius * 2.5)) + vec3(sin(age * 7.0 + seed) * 1.5, cos(age * 5.0 + seed) * 1.5, 0.0);
+  float size = (vKind == 1 ? mix(1.6, .4, age) * (.7 + radius * .08) : mix(2.0, 9.0, age) * (.6 + radius * .05)) * scale;
+  vCorner = aCorner * 2.0 - 1.0;
+  vec3 world = base + rise * scale + (uRight * vCorner.x + uUp * vCorner.y) * size;
+  gl_Position = uViewProj * vec4(world, 1.0);
+  vDepth = gl_Position.w;
+}`;
+
+const FIRE_FS = `#version 300 es
+precision highp float;
+in vec2 vCorner;
+in float vAge;
+flat in int vKind;
+in float vDepth;
+uniform float uFogDensity;
+out vec4 outColor;
+void main(){
+  float r = length(vCorner);
+  if(r > 1.0) discard;
+  float soft = pow(1.0 - r, 1.5), fog = exp(-pow(vDepth * uFogDensity, 2.0));
+  if(vKind == 1){
+    vec3 color = mix(vec3(1.0, .92, .55), mix(vec3(1.0, .45, .08), vec3(.7, .08, .02), smoothstep(.4, 1.0, vAge)), smoothstep(0.0, .45, vAge));
+    outColor = vec4(color * soft * (1.0 - vAge) * 1.4 * fog, 0.0); // additive glow
+  } else {
+    float alpha = soft * .5 * smoothstep(0.0, .12, vAge) * (1.0 - vAge) * fog;
+    outColor = vec4(vec3(.16, .15, .15) * alpha, alpha); // premultiplied dark smoke
+  }
+}`;
+const FIRE_FLOATS = 7;
+
 // Residents: camera-facing sprites drawn procedurally as glowing stick figures with a walk cycle.
 const WANDERER_VS = `#version 300 es
 precision highp float;
@@ -370,6 +426,8 @@ export class LandscapeRenderer {
     [[0, 0], [1, 12], [2, 24]].forEach(([index, offset]) => { gl.enableVertexAttribArray(index); gl.vertexAttribPointer(index, 3, gl.FLOAT, false, TRAIL_FLOATS * 4, offset); });
     this.beaconLayer = this.boxLayer();
     this.routeProgram = program(gl, ROUTE_VS, ROUTE_FS); this.routeUniforms = uniformsOf(gl, this.routeProgram);
+    this.fireProgram = program(gl, FIRE_VS, FIRE_FS); this.fireUniforms = uniformsOf(gl, this.fireProgram);
+    this.smokeLayer = this.particleLayer(); this.flameLayer = this.particleLayer();
     this.wandererProgram = program(gl, WANDERER_VS, WANDERER_FS); this.wandererUniforms = uniformsOf(gl, this.wandererProgram);
     this.wandererLayer = { vao: gl.createVertexArray(), buffer: gl.createBuffer(), count: 0 };
     gl.bindVertexArray(this.wandererLayer.vao);
@@ -480,6 +538,31 @@ export class LandscapeRenderer {
     this.routeLayer.count = vertices.length / ROUTE_FLOATS;
   }
 
+  particleLayer() {
+    const gl = this.gl, layer = { vao: gl.createVertexArray(), buffer: gl.createBuffer(), count: 0 };
+    gl.bindVertexArray(layer.vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.corners); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, layer.buffer);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, FIRE_FLOATS * 4, 0); gl.vertexAttribDivisor(1, 1);
+    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, FIRE_FLOATS * 4, 16); gl.vertexAttribDivisor(2, 1);
+    return layer;
+  }
+
+  // emitters: [{ x, y, z, radius, burning }] — every emitter smokes, burning ones also carry flames.
+  setFires(emitters) {
+    const smoke = [], flames = [];
+    emitters.forEach((e, index) => {
+      const radius = Math.max(2, e.radius), smokeCount = Math.round(Math.min(60, 18 + radius * 1.5)), flameCount = Math.round(Math.min(70, 16 + radius * 2));
+      for (let i = 0; i < smokeCount; i++) smoke.push(e.x, e.y, e.z, radius, index * 131 + i * 7.13, 0, 1);
+      if (e.burning) for (let i = 0; i < flameCount; i++) flames.push(e.x, e.y, e.z, radius, index * 97 + i * 3.71 + .5, 1, 1);
+    });
+    const gl = this.gl;
+    for (const [layer, data] of [[this.smokeLayer, smoke], [this.flameLayer, flames]]) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, layer.buffer); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+      layer.count = data.length / FIRE_FLOATS;
+    }
+  }
+
   // Resident positions as packed [x, y, phase, seed] per figure; called every frame while they walk.
   setWanderers(packed) {
     const gl = this.gl; gl.bindBuffer(gl.ARRAY_BUFFER, this.wandererLayer.buffer); gl.bufferData(gl.ARRAY_BUFFER, packed, gl.DYNAMIC_DRAW);
@@ -493,7 +576,7 @@ export class LandscapeRenderer {
     this.upload(this.beaconLayer, packed);
   }
 
-  get animating() { return this.mode === 'city' && (this.trailLayer.count > 0 || this.routeLayer.count > 0 || this.wandererLayer.count > 0); }
+  get animating() { return this.mode === 'city' && (this.trailLayer.count > 0 || this.routeLayer.count > 0 || this.wandererLayer.count > 0 || this.smokeLayer.count > 0); }
 
   syncAtlas() {
     const gl = this.gl, atlas = this.atlas; if (!atlas) return;
@@ -602,7 +685,8 @@ export class LandscapeRenderer {
       const size = Math.max(this.cityBounds?.width || 1000, this.cityBounds?.height || 1000);
       const near = c.view === 'heli' ? Math.max(.5, c.distance * .002) : .1, far = c.view === 'heli' ? c.distance * 3 + size * 2 : size * 2.5 + 2000;
       this.eye = eye; this.forward = forward;
-      this.viewProj = multiply(perspective(CITY_FOV, aspect, near, far), lookAt(eye, [eye[0] + forward[0], eye[1] + forward[1], eye[2] + forward[2]], Math.abs(forward[2]) > .999 ? [0, -1, 0] : [0, 0, 1]));
+      this.view = lookAt(eye, [eye[0] + forward[0], eye[1] + forward[1], eye[2] + forward[2]], Math.abs(forward[2]) > .999 ? [0, -1, 0] : [0, 0, 1]);
+      this.viewProj = multiply(perspective(CITY_FOV, aspect, near, far), this.view);
     } else {
       this.heightScale = LANDSCAPE_HEIGHT_SCALE;
       const pose = orbitPose(this.camera);
@@ -642,6 +726,15 @@ export class LandscapeRenderer {
       // Light effects add colour and never occlude: additive blending without depth writes.
       gl.depthMask(false); gl.blendFunc(gl.ONE, gl.ONE);
       if (this.beaconLayer.count) { gl.bindVertexArray(this.beaconLayer.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, this.beaconLayer.count); }
+      if (this.smokeLayer.count) {
+        // Camera-facing particles: the view matrix rows are the camera's right and up axes.
+        const f = this.fireUniforms, v = this.view, c = this.city;
+        gl.useProgram(this.fireProgram);
+        gl.uniformMatrix4fv(f.uViewProj, false, this.viewProj); gl.uniform3f(f.uRight, v[0], v[4], v[8]); gl.uniform3f(f.uUp, v[1], v[5], v[9]);
+        gl.uniform1f(f.uTime, performance.now() / 1000); gl.uniform1f(f.uFogDensity, fog * .6);
+        gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); gl.bindVertexArray(this.smokeLayer.vao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.smokeLayer.count);
+        gl.blendFunc(gl.ONE, gl.ONE); if (this.flameLayer.count) { gl.bindVertexArray(this.flameLayer.vao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.flameLayer.count); }
+      }
       if (this.wandererLayer.count) {
         const w = this.wandererUniforms, f = this.forward, len = Math.hypot(f[0], f[1]) || 1, c = this.city;
         gl.useProgram(this.wandererProgram); gl.bindVertexArray(this.wandererLayer.vao);

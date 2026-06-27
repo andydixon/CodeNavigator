@@ -80,3 +80,32 @@ test('folder labels keep the tail of long paths', () => {
   const long = folderLabel('web/ui/react-app/src/pages/graph/components', 'x');
   assert.ok(long.startsWith('…/') && long.endsWith('graph/components') && long.length <= 34 + 2, long);
 });
+
+import { alertsByPath, burns, tapeQuads } from '../web/city.js';
+
+test('alerts group by file with the worst severity', () => {
+  const byPath = alertsByPath({ available: true, codeScanning: { alerts: [{ path: 'a.go', severity: 'medium' }, { path: 'a.go', severity: 'critical' }] }, dependabot: { alerts: [{ path: 'go.mod', severity: 'low' }, { path: '', severity: 'high' }] } });
+  assert.equal(byPath.size, 2);
+  assert.equal(byPath.get('a.go').worst, 'critical');
+  assert.equal(byPath.get('a.go').codeScanning.length, 2);
+  assert.equal(byPath.get('go.mod').dependabot.length, 1);
+  assert.equal(alertsByPath({ available: false, reason: 'signin' }).size, 0);
+  assert.ok(burns('high') && burns('critical') && !burns('medium') && !burns(undefined));
+});
+
+test('hazard tape crosses each wall corner to corner, readable from outside', () => {
+  const b = { x: 0, y: 0, w: 20, h: 10, height: 40 };
+  for (const direction of [1, -1]) {
+    const quads = tapeQuads(b, 6, direction);
+    const south = quads.filter(q => q.c[1] > 10);
+    const length = south.reduce((sum, q) => sum + Math.hypot(...q.u) * 2, 0);
+    assert.ok(Math.abs(length - Math.hypot(20, 40)) < 1e-6, `covers the diagonal: ${length}`);
+    const [first, last] = [south[0], south.at(-1)];
+    assert.ok(direction > 0 ? first.c[2] < last.c[2] : first.c[2] > last.c[2], 'runs the right way');
+    assert.ok(south.every(q => q.c[2] >= 0 && q.c[2] <= 40 && q.c[0] >= 0 && q.c[0] <= 20));
+    assert.ok(south.every(q => readableFrom(q, [10, 60, 20])) && south.every(q => !readableFrom(q, [10, 5, 20])));
+    assert.ok(south.at(-1).fraction <= 1 && south.slice(0, -1).every(q => q.fraction === 1));
+    assert.equal(new Set(quads.map(q => `${Math.sign(q.c[0] - 10)},${Math.sign(q.c[1] - 5)}`)).size >= 4, true, 'all four walls');
+  }
+  assert.equal(tapeQuads({ x: 0, y: 0, w: 2, h: 2, height: 30 }, 6).length, 0, 'too narrow for tape');
+});

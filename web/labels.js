@@ -21,6 +21,9 @@ const STYLES = {
   selected: { font: '700 30px Inter, system-ui, sans-serif', text: '#1a1405', fill: 'rgba(255,236,140,.96)', border: 'rgba(255,255,255,.5)' },
   // Folder blades at street corners, in street-sign green.
   street: { font: '600 30px Inter, system-ui, sans-serif', text: '#f4fff9', fill: 'rgba(14,112,76,.96)', border: 'rgba(255,255,255,.55)' },
+  // Hazard tape: square-cut, edge to edge, with warning stripes where the repeated label joins.
+  tapeDependabot: { font: '800 28px Inter, system-ui, sans-serif', text: '#141414', fill: '#f5c518', stripe: '#141414', tape: true },
+  tapeCodeScanning: { font: '800 28px Inter, system-ui, sans-serif', text: '#ffffff', fill: '#d7263d', stripe: '#ffffff', tape: true },
   // District and street names painted on the ground.
   ground: { font: '700 34px Inter, system-ui, sans-serif', text: 'rgba(205,198,255,.9)' },
 };
@@ -49,12 +52,16 @@ export class LabelAtlas {
     if (cached) return cached;
     const s = STYLES[style], ctx = this.ctx, h = this.packer.rowHeight;
     ctx.font = s.font;
-    const pad = s.fill ? 14 : 4, width = Math.ceil(Math.min(ctx.measureText(text).width + pad * 2, 900));
+    const stripes = s.tape ? 44 : 0, pad = s.tape ? 12 : s.fill ? 14 : 4, width = Math.ceil(Math.min(ctx.measureText(text).width + pad * 2 + stripes, 900));
     const slot = this.packer.add(width);
     if (!slot) return null;
     ctx.save();
     ctx.beginPath(); ctx.rect(slot.x, slot.y, slot.w, slot.h); ctx.clip();
-    if (s.fill) {
+    if (s.tape) {
+      ctx.fillStyle = s.fill; ctx.fillRect(slot.x, slot.y + 4, slot.w, h - 8);
+      ctx.fillStyle = s.stripe;
+      for (let i = 0; i < 3; i++) { const x = slot.x + slot.w - stripes + 4 + i * 14; ctx.beginPath(); ctx.moveTo(x, slot.y + h - 4); ctx.lineTo(x + 7, slot.y + h - 4); ctx.lineTo(x + 19, slot.y + 4); ctx.lineTo(x + 12, slot.y + 4); ctx.closePath(); ctx.fill(); }
+    } else if (s.fill) {
       ctx.fillStyle = s.fill; ctx.strokeStyle = s.border; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.roundRect(slot.x + 1, slot.y + 3, slot.w - 2, h - 6, 12); ctx.fill(); ctx.stroke();
     }

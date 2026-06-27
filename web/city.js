@@ -553,3 +553,50 @@ export function stepWanderers(all, grid, dt, random = Math.random) {
 export function seededRandom(seed) {
   return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
 }
+
+// ---- Security alerts: burning buildings and hazard tape ----
+
+const SEVERITY_RANK = { low: 1, medium: 2, high: 3, critical: 4 };
+
+// Groups an /alerts response by file path: { codeScanning: [], dependabot: [], worst }.
+export function alertsByPath(response) {
+  const byPath = new Map();
+  if (!response?.available) return byPath;
+  for (const [kind, set] of [['codeScanning', response.codeScanning], ['dependabot', response.dependabot]]) {
+    for (const alert of set?.alerts || []) {
+      if (!alert.path) continue;
+      const entry = byPath.get(alert.path) || { codeScanning: [], dependabot: [], worst: 'low' };
+      entry[kind].push(alert);
+      if ((SEVERITY_RANK[alert.severity] || 0) > SEVERITY_RANK[entry.worst]) entry.worst = alert.severity;
+      byPath.set(alert.path, entry);
+    }
+  }
+  return byPath;
+}
+
+// Critical and high alerts set a building alight; medium and low only smoulder.
+export const burns = severity => (SEVERITY_RANK[severity] || 0) >= SEVERITY_RANK.high;
+
+// Hazard tape running diagonally across every wall, as segments tiling a repeated label.
+// direction 1 rises left to right (Dependabot), -1 falls (code scanning), so both together form an X.
+// Each segment is a quad plus `fraction`, the share of the label it shows (the last one is cut short).
+export function tapeQuads(b, aspect, direction = 1) {
+  const out = [], tape = Math.max(1.8, Math.min(5, Math.min(b.w, b.h) * .14)), offset = .1 + (direction > 0 ? 0 : .02);
+  for (const wall of walls(b)) {
+    const width = wall.width, height = b.height, length = Math.hypot(width, height);
+    if (width < 3) continue;
+    const right = [wall.n[1], -wall.n[0]], dx = width / length, dz = direction * height / length, segment = tape * aspect;
+    const startAlong = -width / 2, startZ = direction > 0 ? 0 : height;
+    for (let s = 0; s < length; s += segment) {
+      const piece = Math.min(segment, length - s), mid = s + piece / 2;
+      const along = startAlong + dx * mid, z = startZ + dz * mid;
+      out.push({
+        c: [wall.c[0] + right[0] * along + wall.n[0] * offset, wall.c[1] + right[1] * along + wall.n[1] * offset, z],
+        u: [right[0] * dx * piece / 2, right[1] * dx * piece / 2, dz * piece / 2],
+        v: [-right[0] * dz * tape / 2, -right[1] * dz * tape / 2, dx * tape / 2],
+        fraction: piece / segment,
+      });
+    }
+  }
+  return out;
+}

@@ -1,5 +1,5 @@
 import { LandscapeRenderer, KIND } from './renderer.js';
-import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, flatQuad, wallSigns, folderBlades, folderLabel, facadeQuad, heading, tourStops, encodePlace, decodePlace, joystick, buildNavGrid, routesFrom, spawnWanderers, stepWanderers, MOVE } from './city.js';
+import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, flatQuad, wallSigns, folderBlades, folderLabel, facadeQuad, heading, tourStops, encodePlace, decodePlace, joystick, buildNavGrid, routesFrom, spawnWanderers, stepWanderers, alertsByPath, burns, tapeQuads, MOVE } from './city.js';
 import { LabelAtlas } from './labels.js';
 import { apiFetch, progressEvents } from './api.mjs';
 
@@ -129,6 +129,7 @@ function computeCity(){
   }
   cityIndex=spatialIndex(cityEntries);
   navGrid=buildNavGrid(cityEntries,cityModel.blocks,cityModel);
+  updateFires();
   spawnResidents();
   // Each folder's own buildings (not its subfolders'), for street-corner signs.
   const byDirectory=new Map();
@@ -366,6 +367,7 @@ function buildMinimap(){
   const ctx=canvas.getContext('2d'),{scale,ox,oy}=minimapTransform();ctx.scale(dpr,dpr);
   ctx.fillStyle='rgba(141,125,255,.08)';
   for(const block of cityModel.blocks)if(block.depth===1)ctx.fillRect(ox+block.x*scale,oy+block.y*scale,block.w*scale,block.h*scale);
+  for(const item of layoutItems){const b=item.city;if(!b||!fileAlerts.has(item.path))continue;ctx.fillStyle='#ff4d3d';ctx.beginPath();ctx.arc(ox+(b.x+b.w/2)*scale,oy+(b.y+b.h/2)*scale,2.6,0,Math.PI*2);ctx.fill();}
   for(const item of layoutItems){const b=item.city;if(!b)continue;ctx.fillStyle=`rgba(${item.color.map(v=>Math.round(v*255)).join(',')},.85)`;ctx.fillRect(ox+b.x*scale,oy+b.y*scale,Math.max(.6,b.w*scale),Math.max(.6,b.h*scale));}
   minimapBase=canvas;
 }
@@ -432,7 +434,7 @@ function applySnapshot(snapshot){
   computeLayout();fitScene();fitCity();updateStats(snapshot);renderInspector();renderResults([]);renderHistory();
   $('#breadcrumbText').textContent=currentName;$('#emptyState').hidden=files.length>0;$('#welcome').hidden=true;
   currentRepoUrl=snapshot.source==='github'?lastGithubUrl.replace(/\/+$/,'').replace(/\.git$/,''):'';
-  endTour();applyPendingPlace();
+  endTour();applyPendingPlace();loadAlerts();
 }
 
 function fitScene(){
@@ -597,7 +599,7 @@ function renderInspector(){
     hint.hidden=false;hint.textContent=expandedCoverageLayer?'Click a file or use ↑ and ↓ to move around the map':'Select an entity on the map';
     const coverageRows=Object.entries(layerLabels).map(([key,label])=>`<button class="coverage-row${expandedCoverageLayer===key?' active':''}" type="button" data-coverage-layer="${key}" aria-expanded="${expandedCoverageLayer===key}"><i style="background:${palettes[paletteIndex][key]}"></i><span>${label}</span><small>${format(sceneStats.layers.get(key)||0)}</small><b aria-hidden="true">${expandedCoverageLayer===key?'−':'+'}</b></button>`).join('');
     const expandedLabel=layerLabels[expandedCoverageLayer];
-    content.innerHTML=`<div class="entity-title"><small>Coverage · ${escapeHtml(currentName)}</small><h2>${format(files.length)} indexed files</h2></div><div class="meta-grid"><span>known links</span><b>${format(sceneStats.known)}</b><span>inferred links</span><b>${format(sceneStats.inferred)}</b><span>definitions</span><b>${format(sceneStats.definitions)}</b><span>source lines</span><b>${format(sceneStats.totalLines)}</b></div><div class="section-title coverage-title"><span>Semantic coverage</span><small>Click a section</small></div><div class="coverage-menu">${coverageRows}</div>${expandedCoverageLayer?`<div class="coverage-list-head"><span>${escapeHtml(expandedLabel)}</span><small>Click or ↑ ↓ to navigate</small></div><div class="coverage-file-list" id="coverageFileList" tabindex="0" role="listbox" aria-label="${escapeHtml(expandedLabel)} files"><div class="coverage-list-spacer" id="coverageListSpacer"></div><div class="coverage-list-window" id="coverageListWindow"></div></div>`:''}`;
+    content.innerHTML=`<div class="entity-title"><small>Coverage · ${escapeHtml(currentName)}</small><h2>${format(files.length)} indexed files</h2></div><div class="meta-grid"><span>known links</span><b>${format(sceneStats.known)}</b><span>inferred links</span><b>${format(sceneStats.inferred)}</b><span>definitions</span><b>${format(sceneStats.definitions)}</b><span>source lines</span><b>${format(sceneStats.totalLines)}</b><span>security alerts</span><b>${alertSummary()}</b></div><div class="section-title coverage-title"><span>Semantic coverage</span><small>Click a section</small></div><div class="coverage-menu">${coverageRows}</div>${expandedCoverageLayer?`<div class="coverage-list-head"><span>${escapeHtml(expandedLabel)}</span><small>Click or ↑ ↓ to navigate</small></div><div class="coverage-file-list" id="coverageFileList" tabindex="0" role="listbox" aria-label="${escapeHtml(expandedLabel)} files"><div class="coverage-list-spacer" id="coverageListSpacer"></div><div class="coverage-list-window" id="coverageListWindow"></div></div>`:''}`;
     content.querySelectorAll('[data-coverage-layer]').forEach(row=>row.addEventListener('click',()=>toggleCoverageLayer(row.dataset.coverageLayer)));
     if(expandedCoverageLayer)mountCoverageList(expandedCoverageLayer);
     return;
@@ -606,7 +608,7 @@ function renderInspector(){
   const connections=(edgesByFile.get(selected.id)||[]).map(edge=>({edge,file:fileById.get(edge.from===selected.id?edge.to:edge.from)})).filter(item=>item.file);
   const related=connections.slice(0,30);
   const sourceStatus=selected.sourceLoading?'Loading complete file…':selected.sourceError?'Preview only':`${format(selected.lines)} lines`;
-  content.innerHTML=`<div class="entity-title"><small>${escapeHtml(selected.path)}</small><h2>${escapeHtml(selected.name)}</h2></div><div class="meta-grid"><span>language</span><b>${escapeHtml(selected.language)}</b><span>semantic layer</span><b>${escapeHtml(layerLabels[selected.layer]||'Other')}</b><span>source lines</span><b>${format(selected.lines)}</b><span>definitions</span><b>${format(selected.symbols.length)}</b><span>complexity</span><b>${format(selected.complexity)}</b><span>connections</span><b>${format(connections.length)}</b></div>${related.length?`<div class="section-title">Relationships · ${related.length}</div>${related.map(({edge,file})=>`<div class="relation" data-id="${file.id}"><i></i><span>${escapeHtml(file.path)}</span><small>${edge.confidence}</small></div>`).join('')}`:'<p class="panel-hint">No indexed file connections. External dependencies and unresolved references are not shown.</p>'}<div class="section-title source-title"><span>Source</span><small>${sourceStatus}</small></div><div class="code-preview" id="sourceViewer" tabindex="0" aria-label="Scrollable source for ${escapeHtml(selected.name)}"><div class="source-spacer" id="sourceSpacer"></div><pre class="source-window" id="sourceWindow"></pre></div>`;
+  content.innerHTML=`<div class="entity-title"><small>${escapeHtml(selected.path)}</small><h2>${escapeHtml(selected.name)}</h2></div><div class="meta-grid"><span>language</span><b>${escapeHtml(selected.language)}</b><span>semantic layer</span><b>${escapeHtml(layerLabels[selected.layer]||'Other')}</b><span>source lines</span><b>${format(selected.lines)}</b><span>definitions</span><b>${format(selected.symbols.length)}</b><span>complexity</span><b>${format(selected.complexity)}</b><span>connections</span><b>${format(connections.length)}</b></div>${alertSection(selected)}${related.length?`<div class="section-title">Relationships · ${related.length}</div>${related.map(({edge,file})=>`<div class="relation" data-id="${file.id}"><i></i><span>${escapeHtml(file.path)}</span><small>${edge.confidence}</small></div>`).join('')}`:'<p class="panel-hint">No indexed file connections. External dependencies and unresolved references are not shown.</p>'}<div class="section-title source-title"><span>Source</span><small>${sourceStatus}</small></div><div class="code-preview" id="sourceViewer" tabindex="0" aria-label="Scrollable source for ${escapeHtml(selected.name)}"><div class="source-spacer" id="sourceSpacer"></div><pre class="source-window" id="sourceWindow"></pre></div>`;
   content.querySelectorAll('.relation[data-id]').forEach(row=>row.addEventListener('click',()=>selectFile(fileById.get(Number(row.dataset.id)))));
   mountSourceViewer(selected);
 }
@@ -792,6 +794,41 @@ function updateResidents(seconds){
   renderer.setWanderers(residentBuffer);
 }
 
+// ---- Security alerts from GitHub: burning buildings, hazard tape and inspector details ----
+let fileAlerts=new Map(),alertState={loading:false,reason:'',statuses:null};
+async function loadAlerts(){
+  fileAlerts=new Map();alertState={loading:!!currentRepoUrl,reason:currentRepoUrl?'':'not-github',statuses:null};
+  updateFires();
+  if(!currentRepoUrl||!currentSnapshot)return renderInspector();
+  const snapshotId=currentSnapshot;
+  try{
+    const response=await apiFetch(apiUrl(`/api/snapshots/${snapshotId}/alerts`));
+    const payload=await response.json();if(currentSnapshot!==snapshotId)return;
+    fileAlerts=alertsByPath(payload);
+    alertState={loading:false,reason:payload.reason||'',statuses:payload.available?{codeScanning:payload.codeScanning.status,dependabot:payload.dependabot.status}:null};
+  }catch{alertState={loading:false,reason:'unavailable',statuses:null};}
+  updateFires();if(cityModel)buildMinimap();signState.key='';renderInspector();dirty=true;
+}
+function updateFires(){
+  if(!cityModel)return;
+  const emitters=[];
+  for(const b of cityEntries){const alerts=fileAlerts.get(b.file.path);if(alerts)emitters.push({x:b.x+b.w/2,y:b.y+b.h/2,z:b.height,radius:Math.min(b.w,b.h)/2,burning:burns(alerts.worst)});}
+  renderer.setFires(emitters);
+}
+function alertSummary(){
+  if(alertState.loading)return 'loading…';
+  if(alertState.reason==='signin')return 'sign in to GitHub';
+  if(alertState.reason)return '—';
+  const count=[...fileAlerts.values()].reduce((n,a)=>n+a.codeScanning.length+a.dependabot.length,0);
+  const blocked=Object.entries(alertState.statuses||{}).filter(([,status])=>status!=='ok').map(([kind])=>kind==='dependabot'?'Dependabot':'code scanning');
+  return `${format(count)} in ${format(fileAlerts.size)} files${blocked.length?` (no ${blocked.join(' or ')} access)`:''}`;
+}
+function alertSection(file){
+  const alerts=fileAlerts.get(file.path);if(!alerts)return '';
+  const rows=[...alerts.codeScanning.map(a=>({...a,kind:'Code scanning'})),...alerts.dependabot.map(a=>({...a,kind:'Dependabot'}))];
+  return `<div class="section-title">Security alerts · ${rows.length}</div>${rows.map(a=>`<a class="alert-row" href="${escapeHtml(/^https:\/\/github\.com\//.test(a.url)?a.url:'#')}" target="_blank" rel="noopener noreferrer"><em class="severity-${escapeHtml(a.severity)}">${escapeHtml(a.severity)}</em><span><strong>${escapeHtml(a.title)}</strong><small>${a.kind}${a.line?` · line ${a.line}`:''}</small></span></a>`).join('')}`;
+}
+
 // Search hits become light columns visible across the city.
 function updateBeacons(){
   if(!cityModel){renderer.setBeacons([]);return;}
@@ -847,6 +884,15 @@ function buildSignQuads(signs,focus,radius,eye,heli,yaw){
     if(!heli&&d<SIGN_LIMITS.wallRadius&&walls<SIGN_LIMITS.walls){
       for(const quad of wallSigns(b,eye,entry.aspect))add(quad,entry);
       walls++;
+    }
+  }
+  // Hazard tape on every building with security alerts, wherever it is in the city.
+  for(const b of cityEntries){
+    const alerts=fileAlerts.get(b.file.path);if(!alerts)continue;
+    for(const [kind,text,style,direction] of [['dependabot','DEPENDABOT ALERT','tapeDependabot',1],['codeScanning','CODE SCANNING ALERT','tapeCodeScanning',-1]]){
+      if(!alerts[kind].length)continue;
+      const entry=label(text,style);if(!entry)continue;
+      for(const quad of tapeQuads(b,entry.aspect,direction))add(quad,{...entry,du:entry.du*quad.fraction});
     }
   }
   // Folder names on blades at the street corners of nearby blocks, one per side of each intersection.

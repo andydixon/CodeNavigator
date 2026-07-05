@@ -640,3 +640,27 @@ export function posterQuads(walls, designs, random = Math.random) {
   }
   return out;
 }
+
+// Flat ribbon triangles for routes on the ground: per vertex x, y, z, across (-1 left .. 1 right),
+// along (metres from the route's start) and kind. Ribbons keep to the right of their direction of
+// travel, so an outbound and an inbound route sharing a street run in separate lanes.
+export const ROUTE_KIND = { knownImport: 0, inferredImport: 1, dependent: 2 };
+export function ribbonVertices(routes, width = 1.3, z = .45, lane = .8) {
+  const vertices = [];
+  for (const route of routes) {
+    let along = 0;
+    for (let i = 1; i < route.points.length; i++) {
+      const [ax, ay] = route.points[i - 1], [bx, by] = route.points[i], length = Math.hypot(bx - ax, by - ay);
+      if (length < 1e-3) continue;
+      // Right of travel is (-dy, dx) in this left-handed world (see heading()). Each segment also runs
+      // half a width past both ends so corners overlap instead of leaving notches.
+      const dx = (bx - ax) / length, dy = (by - ay) / length, rx = -dy, ry = dx;
+      const ox = rx * lane, oy = ry * lane, ex = dx * width / 2, ey = dy * width / 2, hx = rx * width / 2, hy = ry * width / 2;
+      const p0 = [ax - ex + ox, ay - ey + oy], p1 = [bx + ex + ox, by + ey + oy], a0 = along - width / 2, a1 = along + length + width / 2;
+      const v = (p, side, a) => vertices.push(p[0] + hx * side, p[1] + hy * side, z, side, a, route.kind);
+      v(p0, -1, a0); v(p0, 1, a0); v(p1, 1, a1); v(p0, -1, a0); v(p1, 1, a1); v(p1, -1, a1);
+      along += length;
+    }
+  }
+  return vertices;
+}

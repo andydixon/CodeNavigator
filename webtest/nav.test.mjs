@@ -112,3 +112,18 @@ test('posters are pasted on the city side of the walls, tilted and readable from
   }
   assert.ok(new Set(posters.map(p => p.u[2].toFixed(2))).size > 10, 'arbitrary angles');
 });
+
+import { ribbonVertices, heading } from '../web/city.js';
+
+test('route ribbons keep right, so opposite directions on one street use separate lanes', () => {
+  const east = ribbonVertices([{ points: [[0, 0], [100, 0]], kind: 0 }]);
+  const west = ribbonVertices([{ points: [[100, 0], [0, 0]], kind: 2 }]);
+  const ys = vertices => { const out = []; for (let i = 1; i < vertices.length; i += 6) out.push(vertices[i]); return out; };
+  // Heading east (+x) the walker's right is heading(yaw).right with forward (1, 0): yaw = -PI/2.
+  const right = heading(-Math.PI / 2).right;
+  assert.ok(Math.abs(right[0]) < 1e-9 && right[1] > 0, 'right of east is +y here');
+  assert.ok(ys(east).every(y => y > 0), `eastbound ribbon on +y: ${ys(east)}`);
+  assert.ok(ys(west).every(y => y < 0), `westbound ribbon on -y: ${ys(west)}`);
+  const along = []; for (let i = 4; i < east.length; i += 6) along.push(east[i]);
+  assert.ok(Math.max(...along) > 99 && Math.min(...along) < 0 && east[5] === 0 && west[5] === 2);
+});

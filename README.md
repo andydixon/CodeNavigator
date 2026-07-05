@@ -34,7 +34,8 @@ Configuration:
   - `T` or **Tour** flies over the largest districts. **Copy link** shares the repository, view,
     camera and selected file as a URL fragment (GitHub repositories only).
   - Touch: left thumb joystick, right thumb look, pinch to zoom.
-  - Selecting a file also lays glowing routes along the streets to each file it imports.
+  - Selecting a file also lays glowing routes along the streets: cyan/amber chevrons out to each
+    file it imports, and pulsing magenta dashes in from each file that imports it, in separate lanes.
   - Residents wander the streets (toggle in Settings). A wall with posters encloses the city.
   - Signed in with GitHub, files with open code scanning or Dependabot alerts smoke (and burn
     for critical/high) and are wrapped in hazard tape. The GitHub App needs read access to

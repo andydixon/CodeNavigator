@@ -1,4 +1,5 @@
 import { perspective, lookAt, multiply, transform, invert, orbitPose, direction, ORBIT_FOV } from './camera.js';
+import { ribbonVertices } from './city.js';
 
 const VERTICES = new Float32Array([
   // top
@@ -255,13 +256,22 @@ uniform float uTime;
 uniform float uFogDensity;
 out vec4 outColor;
 void main(){
+  float across = abs(vAcrossAlong.x), fog = exp(-pow(vDepth * uFogDensity, 2.0));
+  if(vKind == 2){
+    // Dependents: magenta dashes marching toward the selected file, with a pulse travelling along them.
+    float dash = fract(vAcrossAlong.y * .16 - uTime * 1.1);
+    float onDash = smoothstep(0.0, .05, dash) * (1.0 - smoothstep(.5, .56, dash));
+    float pulse = .55 + .45 * sin(uTime * 5.0 - vAcrossAlong.y * .35);
+    float edge = 1.0 - smoothstep(.55, .95, across);
+    outColor = vec4(vec3(1.0, .22, .72) * edge * (.06 + onDash * (.3 + .45 * pulse)) * fog, 0.0);
+    return;
+  }
   vec3 color = vKind == 0 ? vec3(.21, .83, .76) : vec3(.97, .74, .3);
-  float across = abs(vAcrossAlong.x);
   // Chevron tips lead: the phase grows toward the centre line, and time moves it forward.
   float phase = fract(vAcrossAlong.y * .22 + across * .35 - uTime * 1.4);
   float chevron = smoothstep(0.0, .06, phase) * (1.0 - smoothstep(.22, .32, phase));
   float body = 1.0 - smoothstep(.7, 1.0, across);
-  float glow = body * (.16 + .95 * chevron) * exp(-pow(vDepth * uFogDensity, 2.0));
+  float glow = body * (.16 + .95 * chevron) * fog;
   outColor = vec4(color * glow, 0.0);
 }`;
 const ROUTE_FLOATS = 6;
@@ -541,24 +551,12 @@ export class LandscapeRenderer {
   }
 
   // routes: [{ points: [[x,y], ...], kind }] drawn on the ground from first point to last.
-  setRoutes(routes, width = 1.6, z = .45) {
-    const vertices = [];
-    for (const route of routes) {
-      let along = 0;
-      for (let i = 1; i < route.points.length; i++) {
-        const [ax, ay] = route.points[i - 1], [bx, by] = route.points[i], length = Math.hypot(bx - ax, by - ay);
-        if (length < 1e-3) continue;
-        // Each segment runs half a width past both ends so corners overlap instead of leaving notches.
-        const dx = (bx - ax) / length, dy = (by - ay) / length, nx = -dy * width / 2, ny = dx * width / 2, ex = dx * width / 2, ey = dy * width / 2;
-        const p0 = [ax - ex, ay - ey], p1 = [bx + ex, by + ey], a0 = along - width / 2, a1 = along + length + width / 2;
-        const v = (p, side, a) => vertices.push(p[0] + nx * side, p[1] + ny * side, z, side, a, route.kind);
-        v(p0, -1, a0); v(p0, 1, a0); v(p1, 1, a1); v(p0, -1, a0); v(p1, 1, a1); v(p1, -1, a1);
-        along += length;
-      }
-    }
+  setRoutes(routes) {
+    const vertices = ribbonVertices(routes);
     const gl = this.gl; gl.bindBuffer(gl.ARRAY_BUFFER, this.routeLayer.buffer); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.DYNAMIC_DRAW);
     this.routeLayer.count = vertices.length / ROUTE_FLOATS;
   }
+
 
   particleLayer() {
     const gl = this.gl, layer = { vao: gl.createVertexArray(), buffer: gl.createBuffer(), count: 0 };

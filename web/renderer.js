@@ -16,7 +16,7 @@ const VERTICES = new Float32Array([
 ]);
 
 // Instance kinds in the box program.
-export const KIND = { building: 0, block: 1, ground: 2, beacon: 3 };
+export const KIND = { building: 0, block: 1, ground: 2, beacon: 3, wall: 4 };
 const FLOATS_PER_INSTANCE = 16;
 
 // Landscape heights are exaggerated relative to the 1000x680 map so small repositories still read as 3D.
@@ -107,6 +107,18 @@ void main(){
     return;
   }
   if(vKind.x == 2){ outColor = vec4(fog(vec3(.03, .036, .052)), uAlpha); return; } // asphalt
+  if(vKind.x == 4){
+    // City wall: concrete courses and panel joints in metres, lit coping along the top.
+    vec2 faceUv = vFace == 0 || vFace == 5 ? vUnit.xy : vFace < 3 ? vUnit.xz : vUnit.yz;
+    float along = (vFace < 3 ? vUnit.x * vSize.x : vUnit.y * vSize.y), up = vUnit.z * vSize.z;
+    float joints = max(step(.97, fract(along / 6.0)), step(.95, fract(up / 2.8)));
+    vec3 concrete = vec3(.12, .13, .16) * (.65 + .35 * vUnit.z) * (1.0 - joints * .35);
+    if(vFace == 0) concrete = vec3(.2, .21, .26);
+    float edgeWall = min(min(faceUv.x, 1.0 - faceUv.x), min(faceUv.y, 1.0 - faceUv.y));
+    float rim = 1.0 - smoothstep(0.0, fwidth(edgeWall) * 1.5 + .002, edgeWall);
+    outColor = vec4(fog(mix(concrete, vec3(.55, .5, 1.0) * .8, rim * step(.9, vUnit.z + (vFace == 0 ? 1.0 : 0.0)))), uAlpha);
+    return;
+  }
 #endif
   if(uMode < .5 && vFace > 0) discard;
   vec2 face = vFace == 0 || vFace == 5 ? vUnit.xy : vFace < 3 ? vUnit.xz : vUnit.yz;
@@ -418,7 +430,7 @@ export class LandscapeRenderer {
     this.landscape = this.boxLayer(); this.cityLayer = this.boxLayer();
     this.signProgram = program(gl, SIGN_VS, SIGN_FS); this.signUniforms = uniformsOf(gl, this.signProgram);
     this.corners = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, this.corners); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
-    this.signLayer = this.quadLayer(); this.facadeLayer = this.quadLayer();
+    this.signLayer = this.quadLayer(); this.facadeLayer = this.quadLayer(); this.posterLayer = this.quadLayer(); this.posterTexture = this.texture();
     this.atlasTexture = this.texture(); this.facadeTexture = this.texture(); this.atlasGeneration = -1;
     this.trailProgram = program(gl, TRAIL_VS, TRAIL_FS); this.trailUniforms = uniformsOf(gl, this.trailProgram);
     this.trailLayer = { vao: gl.createVertexArray(), buffer: gl.createBuffer(), count: 0 };
@@ -485,6 +497,16 @@ export class LandscapeRenderer {
     const gl = this.gl, packed = LandscapeRenderer.packQuads(quads);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.signLayer.buffer); gl.bufferData(gl.ARRAY_BUFFER, packed, gl.DYNAMIC_DRAW);
     this.signLayer.count = quads.length;
+  }
+
+  // Posters on the city wall: a PosterAtlas and quads with uv rects; uploaded once per city.
+  setPosters(atlas, quads) {
+    const gl = this.gl;
+    gl.bindTexture(gl.TEXTURE_2D, this.posterTexture); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, atlas.canvas); gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.posterLayer.buffer); gl.bufferData(gl.ARRAY_BUFFER, LandscapeRenderer.packQuads(quads), gl.STATIC_DRAW);
+    this.posterLayer.count = quads.length;
   }
 
   // Source code on one wall: a canvas and its quad, or null to hide.
@@ -763,6 +785,7 @@ export class LandscapeRenderer {
       this.syncAtlas();
       gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false);
       gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-2, -8);
+      this.drawQuads(this.posterLayer, this.posterTexture);
       this.drawQuads(this.facadeLayer, this.facadeTexture);
       this.drawQuads(this.signLayer, this.atlasTexture);
       gl.disable(gl.POLYGON_OFFSET_FILL); gl.depthMask(true); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);

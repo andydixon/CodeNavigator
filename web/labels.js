@@ -84,3 +84,63 @@ export class LabelAtlas {
     return { x: d.x0, y: d.y0, image: this.ctx.getImageData(d.x0, d.y0, w, h) };
   }
 }
+
+// Posters for the city wall, painted into one atlas. Each design is { title, body, theme }.
+const POSTER_THEMES = [
+  { paper: '#f2e6c9', ink: '#1d1d1f', accent: '#d7263d' },
+  { paper: '#1b2a4a', ink: '#f5efe0', accent: '#f5c518' },
+  { paper: '#d7263d', ink: '#fff6e8', accent: '#141414' },
+  { paper: '#3ddc97', ink: '#0b1f17', accent: '#0b1f17' },
+  { paper: '#8d7dff', ink: '#ffffff', accent: '#36d3c2' },
+  { paper: '#f5c518', ink: '#141414', accent: '#141414' },
+];
+
+export class PosterAtlas {
+  constructor(designs, width = 256, height = 376, columns = 8) {
+    const rows = Math.ceil(designs.length / columns);
+    this.canvas = document.createElement('canvas');
+    this.canvas.width = width * columns; this.canvas.height = height * rows;
+    const ctx = this.canvas.getContext('2d');
+    this.uvs = designs.map((design, i) => {
+      const x = (i % columns) * width, y = Math.floor(i / columns) * height;
+      ctx.save(); ctx.translate(x, y); paintPoster(ctx, design, width, height, POSTER_THEMES[i % POSTER_THEMES.length], i); ctx.restore();
+      return { u: x / this.canvas.width, v: y / this.canvas.height, du: width / this.canvas.width, dv: height / this.canvas.height };
+    });
+  }
+}
+
+function wrap(ctx, text, maxWidth) {
+  const lines = []; let line = '';
+  for (const word of text.split(/\s+/)) {
+    const next = line ? `${line} ${word}` : word;
+    if (line && ctx.measureText(next).width > maxWidth) { lines.push(line); line = word; } else line = next;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+function paintPoster(ctx, { title, body }, w, h, theme, variant) {
+  const inset = 6;
+  ctx.fillStyle = theme.paper; ctx.fillRect(inset, inset, w - inset * 2, h - inset * 2);
+  // Weathering: faint speckles and a darker fold line.
+  ctx.fillStyle = 'rgba(0,0,0,.06)';
+  for (let i = 0; i < 70; i++) ctx.fillRect(inset + ((i * 73 + variant * 31) % (w - inset * 2)), inset + ((i * 137 + variant * 17) % (h - inset * 2)), 2, 2);
+  ctx.fillRect(inset, h * .52, w - inset * 2, 1.5);
+  // A bold graphic per variant.
+  ctx.fillStyle = theme.accent;
+  const shape = variant % 4;
+  if (shape === 0) { ctx.beginPath(); ctx.arc(w / 2, 104, 52, 0, Math.PI * 2); ctx.fill(); }
+  else if (shape === 1) { for (let i = 0; i < 6; i++) { ctx.beginPath(); ctx.moveTo(inset + i * 44, inset); ctx.lineTo(inset + i * 44 + 22, inset); ctx.lineTo(inset + i * 44 - 30, 150); ctx.lineTo(inset + i * 44 - 52, 150); ctx.fill(); } }
+  else if (shape === 2) { ctx.beginPath(); ctx.moveTo(w / 2, 40); ctx.lineTo(w / 2 + 64, 160); ctx.lineTo(w / 2 - 64, 160); ctx.closePath(); ctx.fill(); ctx.fillStyle = theme.paper; ctx.font = '900 64px Inter, system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.fillText('!', w / 2, 150); }
+  else { ctx.fillRect(inset, 40, w - inset * 2, 22); ctx.fillRect(inset, 84, w - inset * 2, 22); ctx.fillRect(inset, 128, w - inset * 2, 22); }
+  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.fillStyle = theme.ink;
+  ctx.font = '900 34px Inter, system-ui, sans-serif';
+  let y = 206;
+  for (const line of wrap(ctx, title.toUpperCase(), w - 36).slice(0, 3)) { ctx.fillText(line, w / 2, y, w - 30); y += 36; }
+  ctx.font = '600 17px Inter, system-ui, sans-serif';
+  y += 6;
+  for (const line of wrap(ctx, body, w - 44).slice(0, 4)) { ctx.fillText(line, w / 2, y, w - 30); y += 21; }
+  ctx.font = '700 10px Inter, system-ui, sans-serif'; ctx.globalAlpha = .7;
+  ctx.fillText('CODENAVIGATOR CIVIC AUTHORITY', w / 2, h - 18);
+  ctx.globalAlpha = 1;
+}

@@ -190,8 +190,10 @@ export function stepCamera(camera, input, dt, index, bounds) {
     camera.ez = MOVE.eyeHeight;
   }
   if (camera.ez < 400) ({ x, y } = collide(x, y, MOVE.radius, { near: (px, py, r) => [...index.near(px, py, r)].filter(b => b.height + .5 > camera.ez - MOVE.eyeHeight) }));
-  camera.ex = Math.max(-150, Math.min(bounds.width + 150, x));
-  camera.ey = Math.max(-150, Math.min(bounds.height + 150, y));
+  // Never beyond the city wall, even when flying over it.
+  const edge = bounds.edge ?? 150;
+  camera.ex = Math.max(-edge, Math.min(bounds.width + edge, x));
+  camera.ey = Math.max(-edge, Math.min(bounds.height + edge, y));
   return camera;
 }
 
@@ -595,6 +597,44 @@ export function tapeQuads(b, aspect, direction = 1) {
         u: [right[0] * dx * piece / 2, right[1] * dx * piece / 2, dz * piece / 2],
         v: [-right[0] * dz * tape / 2, -right[1] * dz * tape / 2, dx * tape / 2],
         fraction: piece / segment,
+      });
+    }
+  }
+  return out;
+}
+
+// ---- The city wall and its posters ----
+
+export const WALL = { margin: 24, height: 14, thickness: 2 };
+
+// Four boxes enclosing the city `margin` metres beyond its edge; `inward` is the city-facing normal.
+export function cityWalls(bounds, { margin, height, thickness } = WALL) {
+  const x0 = -margin - thickness, y0 = -margin - thickness, x1 = bounds.width + margin, y1 = bounds.height + margin, span = x1 + thickness - x0;
+  return [
+    { x: x0, y: y0, w: span, h: thickness, height, inward: [0, 1] },
+    { x: x0, y: y1, w: span, h: thickness, height, inward: [0, -1] },
+    { x: x0, y: y0, w: thickness, h: y1 + thickness - y0, height, inward: [1, 0] },
+    { x: x1, y: y0, w: thickness, h: y1 + thickness - y0, height, inward: [-1, 0] },
+  ];
+}
+
+// Posters pasted on the city side of the walls at random spots, sizes and tilts (up to ±25°),
+// one per ~35 m of wall. Each quad carries `poster`, an index into `designs`.
+export function posterQuads(walls, designs, random = Math.random) {
+  const out = [];
+  for (const wall of walls) {
+    const [nx, ny] = wall.inward, length = nx ? wall.h : wall.w;
+    const along = [ny, -nx]; // left to right for someone facing the wall from inside
+    const face = [wall.x + wall.w / 2 + nx * wall.w / 2, wall.y + wall.h / 2 + ny * wall.h / 2];
+    for (let i = 0, count = Math.max(1, Math.round(length / 35)); i < count; i++) {
+      const height = 3 + random() * 2.5, width = height * .68, tilt = (random() - .5) * .87;
+      const offset = (random() - .5) * (length - 12), z = 2.2 + height / 2 + random() * (wall.height - height - 3.5);
+      const cos = Math.cos(tilt), sin = Math.sin(tilt), lift = .05 + i * .002; // later posters sit on top
+      out.push({
+        c: [face[0] + along[0] * offset + nx * lift, face[1] + along[1] * offset + ny * lift, z],
+        u: [along[0] * cos * width / 2, along[1] * cos * width / 2, sin * width / 2],
+        v: [-along[0] * sin * height / 2, -along[1] * sin * height / 2, cos * height / 2],
+        poster: Math.floor(random() * designs),
       });
     }
   }

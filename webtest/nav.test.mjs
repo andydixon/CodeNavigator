@@ -80,3 +80,35 @@ test('a seeded crowd is reproducible', () => {
   const run = () => { const r = seededRandom(3), c = spawnWanderers(grid, 10, r); for (let i = 0; i < 100; i++) stepWanderers(c, grid, .05, r); return c.map(w => [w.x.toFixed(3), w.y.toFixed(3)]); };
   assert.deepEqual(run(), run());
 });
+
+import { cityWalls, posterQuads, WALL, stepCamera, readableFrom, spatialIndex } from '../web/city.js';
+
+test('the wall encloses the city and nobody gets past it', () => {
+  const bounds = { width: 200, height: 120 }, walls = cityWalls(bounds);
+  const inside = (x, y) => walls.every(w => !(x > w.x && x < w.x + w.w && y > w.y && y < w.y + w.h));
+  assert.ok(inside(100, 60) && inside(-WALL.margin + 1, -WALL.margin + 1) && !inside(-WALL.margin - 1, 60));
+  const index = spatialIndex(walls), edge = WALL.margin - .5;
+  const walker = { view: 'walk', ex: 100, ey: 60, ez: 1.7, lookYaw: Math.PI / 2, lookPitch: 0 }; // heading west
+  stepCamera(walker, { forward: 1, right: 0, up: 0 }, 60, index, { ...bounds, edge });
+  assert.ok(walker.ex >= -WALL.margin, `walker stopped at the wall: ${walker.ex}`);
+  const flyer = { view: 'fly', ex: 100, ey: 60, ez: 500, lookYaw: Math.PI / 2, lookPitch: 0 };
+  stepCamera(flyer, { forward: 1, right: 0, up: 0 }, 60, index, { ...bounds, edge });
+  assert.ok(flyer.ex >= -edge - 1e-9, `flyer stayed inside: ${flyer.ex}`);
+  // Routes and residents can't reach the outside either.
+  const grid = buildNavGrid(walls, [], bounds);
+  assert.ok(walkable(grid, 100, 60) && !walkable(grid, -WALL.margin - 1, 60));
+});
+
+test('posters are pasted on the city side of the walls, tilted and readable from inside', () => {
+  const bounds = { width: 400, height: 300 }, walls = cityWalls(bounds), random = seededRandom(11);
+  const posters = posterQuads(walls, 12, random);
+  assert.ok(posters.length >= 36, `about one per 35 m (${posters.length})`);
+  for (const p of posters) {
+    assert.ok(readableFrom(p, [200, 150, 5]), 'faces the city');
+    assert.ok(p.c[0] > -WALL.margin - .01 && p.c[0] < bounds.width + WALL.margin + .01 && p.c[1] > -WALL.margin - .01 && p.c[1] < bounds.height + WALL.margin + .01, `on the inner face: ${p.c}`);
+    const tilt = Math.atan2(p.u[2], Math.hypot(p.u[0], p.u[1]));
+    assert.ok(Math.abs(tilt) <= .44 && p.c[2] - Math.hypot(...p.v) >= 1.5 && p.c[2] + Math.hypot(...p.v) <= WALL.height + .5);
+    assert.ok(Number.isInteger(p.poster) && p.poster >= 0 && p.poster < 12);
+  }
+  assert.ok(new Set(posters.map(p => p.u[2].toFixed(2))).size > 10, 'arbitrary angles');
+});

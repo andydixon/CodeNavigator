@@ -1,6 +1,6 @@
 import { LandscapeRenderer, KIND } from './renderer.js';
-import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, flatQuad, wallSigns, folderBlades, folderLabel, facadeQuad, heading, tourStops, encodePlace, decodePlace, joystick, buildNavGrid, routesFrom, spawnWanderers, stepWanderers, alertsByPath, burns, tapeQuads, MOVE } from './city.js';
-import { LabelAtlas } from './labels.js';
+import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, flatQuad, wallSigns, folderBlades, folderLabel, facadeQuad, heading, tourStops, encodePlace, decodePlace, joystick, buildNavGrid, routesFrom, spawnWanderers, stepWanderers, alertsByPath, burns, tapeQuads, cityWalls, posterQuads, seededRandom, WALL, MOVE } from './city.js';
+import { LabelAtlas, PosterAtlas } from './labels.js';
 import { apiFetch, progressEvents } from './api.mjs';
 
 const configuredBackend=window.CODENAVIGATOR_CONFIG?.backendUrl?.trim()||'';
@@ -46,7 +46,7 @@ let searchHits=[];
 let expandedCoverageLayer=null;
 let coverageActiveIndex=-1;
 let cameraAnimation=null;
-let cityModel=null,cityEntries=[],cityIndex=null,cityFitted=false,cityDistricts=[],cityFolders=[],navGrid=null,cityRoutes=[],wanderers=[],showResidents=true;
+let cityModel=null,cityEntries=[],cityIndex=null,collisionIndex=null,cityWallBoxes=[],cityFitted=false,cityDistricts=[],cityFolders=[],navGrid=null,cityRoutes=[],wanderers=[],showResidents=true;
 let currentSnapshot=null;
 let currentName='';
 let currentMetric='lines';
@@ -128,7 +128,10 @@ function computeCity(){
     instances.push({...building,color:item.color,atlas:[item.x/1000,item.y/680,item.w/1000,item.h/680],kind:KIND.building,id:item.id,lit:Math.min(.85,.06+Math.sqrt(symbols)/9)});
   }
   cityIndex=spatialIndex(cityEntries);
-  navGrid=buildNavGrid(cityEntries,cityModel.blocks,cityModel);
+  // The wall keeps walkers, residents and routes inside; it's in the collision index but not the pick index.
+  cityWallBoxes=cityWalls(cityModel);
+  collisionIndex=spatialIndex([...cityEntries,...cityWallBoxes]);
+  navGrid=buildNavGrid([...cityEntries,...cityWallBoxes],cityModel.blocks,cityModel);
   updateFires();
   spawnResidents();
   // Each folder's own buildings (not its subfolders'), for street-corner signs.
@@ -137,6 +140,8 @@ function computeCity(){
   cityFolders=cityModel.blocks.map(block=>({block,buildings:byDirectory.get(block.node.path)||[],label:folderLabel(block.node.path,currentName)})).filter(folder=>folder.buildings.length);
   const tally=node=>{let files=node.files.length,lines=node.files.reduce((n,f)=>n+(f.lines||0),0);for(const child of node.children.values()){const t=tally(child);files+=t.files;lines+=t.lines;}return{files,lines};};
   cityDistricts=cityModel.blocks.filter(block=>block.depth===1).map(block=>({block,...tally(block.node),top:Math.max(10,...[...cityIndex.near(block.x+block.w/2,block.y+block.h/2,Math.hypot(block.w,block.h)/2)].filter(b=>b.x>=block.x&&b.x+b.w<=block.x+block.w&&b.y>=block.y&&b.y+b.h<=block.y+block.h).map(b=>b.height))}));
+  for(const wall of cityWallBoxes)instances.push({...wall,color:[.55,.5,1],kind:KIND.wall});
+  pastePosters();
   renderer.setCity(instances,{width:cityModel.width,height:cityModel.height});
   buildMinimap();updateCityHud();updateTrails();updateRoutes();updateBeacons();signState.key='';facadeState={entry:null,texture:null};renderer.setFacade(null);
 }
@@ -171,11 +176,11 @@ function setCityView(view,at){
       if(fromHeli)Object.assign(c,{ex:eye[0],ey:eye[1],ez:eye[2],lookYaw:Math.atan2(-forward[0],-forward[1]),lookPitch:Math.asin(Math.max(-1,Math.min(1,forward[2])))});
       // With routes showing, walking starts at the selected building's door facing down the first route.
       const route=!at&&view==='walk'&&cityRoutes[0]?.points.length>1?cityRoutes[0].points:null;
-      const target=at||route?.[0]||[c.x,c.y],spot=collide(target[0],target[1],MOVE.radius*3,cityIndex);
+      const target=at||route?.[0]||[c.x,c.y],spot=collide(target[0],target[1],MOVE.radius*3,collisionIndex);
       const facing=route?Math.atan2(-(route[1][0]-route[0][0]),-(route[1][1]-route[0][1])):null;
       animateCameraTo({ex:spot.x,ey:spot.y,ez:view==='walk'?MOVE.eyeHeight:Math.min(Math.max(60,c.ez*.5),260),lookYaw:facing??(view==='walk'?openHeading(spot.x,spot.y,c.lookYaw):c.lookYaw),lookPitch:view==='walk'?(route?-.18:0):-.3},c,1100);
     }else if(view==='walk'){
-      const spot=collide(c.ex,c.ey,MOVE.radius*3,cityIndex);
+      const spot=collide(c.ex,c.ey,MOVE.radius*3,collisionIndex);
       animateCameraTo({ex:spot.x,ey:spot.y,ez:MOVE.eyeHeight,lookPitch:0},c,800);
     }
   }
@@ -200,7 +205,7 @@ function stepCity(seconds){
     right:Math.max(-1,Math.min(1,down('KeyD')+down('ArrowRight')-down('KeyA')-down('ArrowLeft')+touchMove.right)),
     up:down('Space')-down('KeyC'),
     run:heldKeys.has('ShiftLeft')||heldKeys.has('ShiftRight'),
-  },seconds,cityIndex,cityModel);
+  },seconds,collisionIndex,{width:cityModel.width,height:cityModel.height,edge:WALL.margin-MOVE.radius});
   dirty=true;
 }
 
@@ -359,12 +364,14 @@ function updateCityReadouts(){
 
 const MINIMAP={width:220,height:150,pad:8};
 function minimapTransform(){
-  const scale=Math.min((MINIMAP.width-MINIMAP.pad*2)/cityModel.width,(MINIMAP.height-MINIMAP.pad*2)/cityModel.height);
+  // Leave room for the city wall around the edge.
+  const scale=Math.min((MINIMAP.width-MINIMAP.pad*2)/(cityModel.width+WALL.margin*2),(MINIMAP.height-MINIMAP.pad*2)/(cityModel.height+WALL.margin*2));
   return {scale,ox:(MINIMAP.width-cityModel.width*scale)/2,oy:(MINIMAP.height-cityModel.height*scale)/2};
 }
 function buildMinimap(){
   const dpr=2,canvas=document.createElement('canvas');canvas.width=MINIMAP.width*dpr;canvas.height=MINIMAP.height*dpr;
   const ctx=canvas.getContext('2d'),{scale,ox,oy}=minimapTransform();ctx.scale(dpr,dpr);
+  ctx.strokeStyle='rgba(141,125,255,.55)';ctx.lineWidth=1.5;ctx.strokeRect(ox-WALL.margin*scale,oy-WALL.margin*scale,(cityModel.width+WALL.margin*2)*scale,(cityModel.height+WALL.margin*2)*scale);
   ctx.fillStyle='rgba(141,125,255,.08)';
   for(const block of cityModel.blocks)if(block.depth===1)ctx.fillRect(ox+block.x*scale,oy+block.y*scale,block.w*scale,block.h*scale);
   for(const item of layoutItems){const b=item.city;if(!b||!fileAlerts.has(item.path))continue;ctx.fillStyle='#ff4d3d';ctx.beginPath();ctx.arc(ox+(b.x+b.w/2)*scale,oy+(b.y+b.h/2)*scale,2.6,0,Math.PI*2);ctx.fill();}
@@ -393,7 +400,7 @@ $('#minimap').addEventListener('pointerdown',event=>{
   const rect=event.currentTarget.getBoundingClientRect(),{scale,ox,oy}=minimapTransform();
   const x=(event.clientX-rect.left-ox)/scale,y=(event.clientY-rect.top-oy)/scale,c=renderer.city;
   if(c.view==='heli')animateCameraTo({x,y},c,700);
-  else{const spot=c.view==='walk'?collide(x,y,MOVE.radius*3,cityIndex):{x,y};animateCameraTo({ex:spot.x,ey:spot.y},c,700);}
+  else{const spot=c.view==='walk'?collide(x,y,MOVE.radius*3,collisionIndex):{x,y};animateCameraTo({ex:spot.x,ey:spot.y},c,700);}
 });
 
 function fitCity(){
@@ -779,6 +786,33 @@ function updateRoutes(){
     if(targets.length)routesFrom(navGrid,source,targets).forEach((points,i)=>{if(points)cityRoutes.push({points,kind:kinds[i],target:targets[i]});});
   }
   renderer.setRoutes(cityRoutes);dirty=true;
+}
+
+// Posters on the city wall: civic slogans plus facts about this codebase, placed from a seed of
+// the repository name so the same city always has the same wall.
+function pastePosters(){
+  const byComplexity=[...files].sort((a,b)=>(b.complexity||0)-(a.complexity||0))[0];
+  const biggest=[...cityDistricts].sort((a,b)=>b.lines-a.lines)[0];
+  const connected=[...referenceDegree.entries()].sort((a,b)=>b[1]-a[1])[0];
+  const designs=[
+    {title:`Welcome to ${currentName}`,body:`${format(files.length)} files · ${format(sceneStats.totalLines)} lines of code`},
+    {title:'Refactor mercilessly',body:'Leave every file better than you found it.'},
+    {title:'Tests are love letters',body:'to whoever touches this code next.'},
+    {title:'YAGNI',body:"You aren't gonna need it. Probably."},
+    {title:'Delete dead code',body:'The best line is the one you remove.'},
+    {title:'Beware circular imports',body:'Report suspicious dependencies at the nearest minimap.'},
+    {title:'Read the docs',body:'Then write the docs you wished you had read.'},
+    {title:'Ship small',body:'Big-bang releases are loud for a reason.'},
+    {title:'Name things well',body:'There are only two hard problems.'},
+    {title:'Keep it boring',body:'Clever code is a 3 a.m. page waiting to happen.'},
+    {title:'Fires are not a vibe',body:'Security alerts are everyone’s job.'},
+    ...(byComplexity?[{title:'Tallest tower',body:`${byComplexity.name}, complexity ${format(byComplexity.complexity)}`}]:[]),
+    ...(biggest?[{title:`Visit ${biggest.block.node.name}`,body:`The largest district: ${format(biggest.files)} files`}]:[]),
+    ...(connected?[{title:'Most connected',body:`${fileById.get(connected[0])?.name||'?'} · ${format(connected[1])} links`}]:[]),
+  ];
+  let seed=0;for(const char of currentName)seed=(seed*31+char.charCodeAt(0))|0;
+  const atlas=new PosterAtlas(designs);
+  renderer.setPosters(atlas,posterQuads(cityWallBoxes,designs.length,seededRandom(seed)).map(quad=>({...quad,uv:atlas.uvs[quad.poster]})));
 }
 
 // Residents: roughly one per 2,500 m² of city, capped so large repos stay cheap to simulate.

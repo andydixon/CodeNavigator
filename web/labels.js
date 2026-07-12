@@ -109,38 +109,78 @@ export class PosterAtlas {
   }
 }
 
-function wrap(ctx, text, maxWidth) {
-  const lines = []; let line = '';
+
+// Largest font size (down to `min`) at which `text` wraps into at most `maxLines` lines that each
+// fit `width`, with the block no taller than `height`. Returns { size, lines }.
+export function fitText(measure, text, width, height, max, min, maxLines, lineHeight = 1.08) {
+  for (let size = max; size >= min; size -= 1) {
+    const lines = [], words = text.split(/\s+/).filter(Boolean);
+    let line = '', fits = true;
+    for (const word of words) {
+      const next = line ? `${line} ${word}` : word;
+      if (measure(next, size) <= width) { line = next; continue; }
+      if (!line || measure(word, size) > width) { fits = false; break; } // a single word too wide
+      lines.push(line); line = word;
+    }
+    if (line) lines.push(line);
+    if (fits && lines.length <= maxLines && lines.length * size * lineHeight <= height) return { size, lines };
+  }
+  // Nothing fits at the smallest size: shorten only the words that are too wide on their own, then
+  // keep the lines that fit, ending with an ellipsis if some had to go.
+  const truncate = word => {
+    if (measure(word, min) <= width) return word;
+    while (word.length > 1 && measure(`${word}…`, min) > width) word = word.slice(0, -1);
+    return `${word}…`;
+  };
+  const shortened = text.split(/\s+/).filter(Boolean).map(truncate).join(' ');
+  if (shortened !== text) return fitText(measure, shortened, width, height, min, min, maxLines, lineHeight);
+  const lines = [];
+  let line = '';
   for (const word of text.split(/\s+/)) {
     const next = line ? `${line} ${word}` : word;
-    if (line && ctx.measureText(next).width > maxWidth) { lines.push(line); line = word; } else line = next;
+    if (measure(next, min) <= width) line = next; else { lines.push(line); line = word; }
   }
-  if (line) lines.push(line);
-  return lines;
+  lines.push(line);
+  const room = Math.max(1, Math.min(maxLines, Math.floor(height / (min * lineHeight))));
+  if (lines.length > room) {
+    lines.length = room;
+    let last = lines[room - 1];
+    while (last.length > 1 && measure(`${last}…`, min) > width) last = last.slice(0, -1);
+    lines[room - 1] = `${last}…`;
+  }
+  return { size: min, lines };
 }
 
 function paintPoster(ctx, { title, body }, w, h, theme, variant) {
-  const inset = 6;
-  ctx.fillStyle = theme.paper; ctx.fillRect(inset, inset, w - inset * 2, h - inset * 2);
+  const inset = 6, pw = w - inset * 2, ph = h - inset * 2, pad = 16;
+  ctx.save();
+  // Everything below is clipped to the paper so no graphic or glyph can escape the poster.
+  ctx.beginPath(); ctx.rect(inset, inset, pw, ph); ctx.clip();
+  ctx.fillStyle = theme.paper; ctx.fillRect(inset, inset, pw, ph);
   // Weathering: faint speckles and a darker fold line.
   ctx.fillStyle = 'rgba(0,0,0,.06)';
-  for (let i = 0; i < 70; i++) ctx.fillRect(inset + ((i * 73 + variant * 31) % (w - inset * 2)), inset + ((i * 137 + variant * 17) % (h - inset * 2)), 2, 2);
-  ctx.fillRect(inset, h * .52, w - inset * 2, 1.5);
-  // A bold graphic per variant.
+  for (let i = 0; i < 70; i++) ctx.fillRect(inset + ((i * 73 + variant * 31) % pw), inset + ((i * 137 + variant * 17) % ph), 2, 2);
+  ctx.fillRect(inset, h * .52, pw, 1.5);
+  // A bold graphic per variant, within the top band.
   ctx.fillStyle = theme.accent;
   const shape = variant % 4;
-  if (shape === 0) { ctx.beginPath(); ctx.arc(w / 2, 104, 52, 0, Math.PI * 2); ctx.fill(); }
-  else if (shape === 1) { for (let i = 0; i < 6; i++) { ctx.beginPath(); ctx.moveTo(inset + i * 44, inset); ctx.lineTo(inset + i * 44 + 22, inset); ctx.lineTo(inset + i * 44 - 30, 150); ctx.lineTo(inset + i * 44 - 52, 150); ctx.fill(); } }
-  else if (shape === 2) { ctx.beginPath(); ctx.moveTo(w / 2, 40); ctx.lineTo(w / 2 + 64, 160); ctx.lineTo(w / 2 - 64, 160); ctx.closePath(); ctx.fill(); ctx.fillStyle = theme.paper; ctx.font = '900 64px Inter, system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.fillText('!', w / 2, 150); }
-  else { ctx.fillRect(inset, 40, w - inset * 2, 22); ctx.fillRect(inset, 84, w - inset * 2, 22); ctx.fillRect(inset, 128, w - inset * 2, 22); }
-  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.fillStyle = theme.ink;
-  ctx.font = '900 34px Inter, system-ui, sans-serif';
-  let y = 206;
-  for (const line of wrap(ctx, title.toUpperCase(), w - 36).slice(0, 3)) { ctx.fillText(line, w / 2, y, w - 30); y += 36; }
-  ctx.font = '600 17px Inter, system-ui, sans-serif';
-  y += 6;
-  for (const line of wrap(ctx, body, w - 44).slice(0, 4)) { ctx.fillText(line, w / 2, y, w - 30); y += 21; }
-  ctx.font = '700 10px Inter, system-ui, sans-serif'; ctx.globalAlpha = .7;
-  ctx.fillText('CODENAVIGATOR CIVIC AUTHORITY', w / 2, h - 18);
-  ctx.globalAlpha = 1;
+  if (shape === 0) { ctx.beginPath(); ctx.arc(w / 2, 100, 50, 0, Math.PI * 2); ctx.fill(); }
+  else if (shape === 1) { for (let i = 0; i < 8; i++) { const x = inset + i * 44; ctx.beginPath(); ctx.moveTo(x, inset); ctx.lineTo(x + 22, inset); ctx.lineTo(x - 30, 150); ctx.lineTo(x - 52, 150); ctx.fill(); } }
+  else if (shape === 2) { ctx.beginPath(); ctx.moveTo(w / 2, 40); ctx.lineTo(w / 2 + 64, 160); ctx.lineTo(w / 2 - 64, 160); ctx.closePath(); ctx.fill(); ctx.fillStyle = theme.paper; ctx.font = '900 64px Inter, system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.fillText('!', w / 2, 150); }
+  else { for (const y of [40, 84, 128]) ctx.fillRect(inset, y, pw, 22); }
+  const font = (weight, size) => `${weight} ${size}px Inter, system-ui, sans-serif`;
+  const measure = weight => (text, size) => { ctx.font = font(weight, size); return ctx.measureText(text).width; };
+  const footer = 30, textTop = 176, textWidth = pw - pad * 2, textBottom = h - inset - footer;
+  const titleFit = fitText(measure(900), title.toUpperCase(), textWidth, (textBottom - textTop) * .55, 34, 14, 3);
+  const bodyFit = fitText(measure(600), body, textWidth, textBottom - textTop - titleFit.lines.length * titleFit.size * 1.08 - 10, 17, 10, 4, 1.25);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillStyle = theme.ink;
+  let y = textTop;
+  ctx.font = font(900, titleFit.size);
+  for (const line of titleFit.lines) { ctx.fillText(line, w / 2, y); y += titleFit.size * 1.08; }
+  y += 10;
+  ctx.font = font(600, bodyFit.size);
+  for (const line of bodyFit.lines) { ctx.fillText(line, w / 2, y); y += bodyFit.size * 1.25; }
+  ctx.font = font(700, 10); ctx.globalAlpha = .7; ctx.textBaseline = 'alphabetic';
+  ctx.fillText('CODENAVIGATOR CIVIC AUTHORITY', w / 2, h - inset - 12, textWidth);
+  ctx.restore();
 }

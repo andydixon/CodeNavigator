@@ -109,3 +109,20 @@ test('hazard tape crosses each wall corner to corner, readable from outside', ()
   }
   assert.equal(tapeQuads({ x: 0, y: 0, w: 2, h: 2, height: 30 }, 6).length, 0, 'too narrow for tape');
 });
+
+import { fitText } from '../web/labels.js';
+
+test('poster text shrinks and wraps until it fits inside the box', () => {
+  const measure = (text, size) => text.length * size * .6; // monospace-ish stand-in for canvas
+  const short = fitText(measure, 'SHIP SMALL', 200, 120, 34, 12, 3);
+  assert.equal(short.size, 34);
+  const long = fitText(measure, 'WELCOME TO AN EXTREMELY LONG REPOSITORY NAME THAT GOES ON', 200, 120, 34, 12, 3);
+  assert.ok(long.lines.length <= 3 && long.lines.length * long.size * 1.08 <= 120);
+  for (const fit of [short, long]) for (const line of fit.lines) assert.ok(measure(line, fit.size) <= 200, line);
+  const word = fitText(measure, 'supercalifragilistic_expialidocious_really_long_filename.go', 200, 120, 34, 12, 3);
+  assert.ok(word.lines.every(line => measure(line, word.size) <= 200) && word.lines[0].endsWith('…'), 'unbreakable words are truncated');
+  const mixed = fitText(measure, 'WELCOME TO PROMETHEUS-OPERATOR-HELM-CHARTS-MONOREPO', 200, 120, 34, 12, 3);
+  assert.ok(mixed.lines[0].startsWith('WELCOME TO') && mixed.lines.every(line => measure(line, mixed.size) <= 200), `keeps the short words: ${mixed.lines}`);
+  const crowded = fitText(measure, 'one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen', 60, 30, 20, 12, 3);
+  assert.ok(crowded.lines.length * 12 * 1.08 <= 30 && crowded.lines.every(line => measure(line, 12) <= 60 + 1e-9), `crowded: ${crowded.lines}`);
+});

@@ -1,5 +1,5 @@
 import { LandscapeRenderer, KIND } from './renderer.js';
-import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, flatQuad, wallSigns, folderBlades, folderLabel, facadeQuad, heading, tourStops, encodePlace, decodePlace, joystick, buildNavGrid, routesFrom, spawnWanderers, stepWanderers, alertsByPath, burns, tapeQuads, cityWalls, posterQuads, seededRandom, WALL, ROUTE_KIND, MOVE } from './city.js';
+import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, flatQuad, wallSigns, folderBlades, folderLabel, facadeQuad, heading, tourStops, encodePlace, decodePlace, joystick, buildNavGrid, routesFrom, spawnWanderers, stepWanderers, alertsByPath, burns, tapeQuads, cityWalls, posterQuads, seededRandom, WALL, ROUTE_KIND, enterBuilding, MOVE } from './city.js';
 import { LabelAtlas, PosterAtlas } from './labels.js';
 import { apiFetch, progressEvents } from './api.mjs';
 
@@ -176,7 +176,7 @@ function setCityView(view,at){
       if(fromHeli)Object.assign(c,{ex:eye[0],ey:eye[1],ez:eye[2],lookYaw:Math.atan2(-forward[0],-forward[1]),lookPitch:Math.asin(Math.max(-1,Math.min(1,forward[2])))});
       // With routes showing, walking starts at the selected building's door facing down the first route.
       // Every route starts (imports) or ends (dependents) at the selected building; walk out from its door.
-      const first=cityRoutes[0],route=!at&&view==='walk'&&first?.points.length>1?(first.outgoing?first.points:[...first.points].reverse()):null;
+      const first=cityRoutes[0],route=!at&&view==='walk'&&first?.points.length>2?(first.outgoing?first.points:[...first.points].reverse()).slice(1):null; // skip the point inside the building
       const target=at||route?.[0]||[c.x,c.y],spot=collide(target[0],target[1],MOVE.radius*3,collisionIndex);
       const facing=route?Math.atan2(-(route[1][0]-route[0][0]),-(route[1][1]-route[0][1])):null;
       animateCameraTo({ex:spot.x,ey:spot.y,ez:view==='walk'?MOVE.eyeHeight:Math.min(Math.max(60,c.ez*.5),260),lookYaw:facing??(view==='walk'?openHeading(spot.x,spot.y,c.lookYaw):c.lookYaw),lookPitch:view==='walk'?(route?-.18:0):-.3},c,1100);
@@ -790,8 +790,11 @@ function updateRoutes(){
       meta.push({outgoing,kind:outgoing?(edge.confidence==='known'?ROUTE_KIND.knownImport:ROUTE_KIND.inferredImport):ROUTE_KIND.dependent});
     }
     // Paths cost the same both ways, so one search from the selected building serves both directions.
-    if(targets.length)routesFrom(navGrid,source,targets).forEach((points,i)=>{
-      if(points)cityRoutes.push({points:meta[i].outgoing?points:[...points].reverse(),kind:meta[i].kind,outgoing:meta[i].outgoing,target:targets[i]});
+    if(targets.length)routesFrom(navGrid,source,targets).forEach((street,i)=>{
+      if(!street)return;
+      // Run from inside the selected building, along the streets, and into the other file's building.
+      const points=[enterBuilding(street[0],source),...street,enterBuilding(street.at(-1),targets[i])];
+      cityRoutes.push({points:meta[i].outgoing?points:points.reverse(),kind:meta[i].kind,outgoing:meta[i].outgoing,target:targets[i]});
     });
   }
   renderer.setRoutes(cityRoutes);dirty=true;

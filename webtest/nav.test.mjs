@@ -125,5 +125,27 @@ test('route ribbons keep right, so opposite directions on one street use separat
   assert.ok(ys(east).every(y => y > 0), `eastbound ribbon on +y: ${ys(east)}`);
   assert.ok(ys(west).every(y => y < 0), `westbound ribbon on -y: ${ys(west)}`);
   const along = []; for (let i = 4; i < east.length; i += 6) along.push(east[i]);
-  assert.ok(Math.max(...along) > 99 && Math.min(...along) < 0 && east[5] === 0 && west[5] === 2);
+  assert.ok(Math.max(...along) === 100 && Math.min(...along) === 0 && east[5] === 0 && west[5] === 2);
+});
+
+import { enterBuilding } from '../web/city.js';
+
+test('turns are mitred: consecutive segments share their corner edge instead of overlapping', () => {
+  const vertices = ribbonVertices([{ points: [[0, 0], [50, 0], [50, 40]], kind: 0 }], 1.3, .45, .8);
+  const at = i => [vertices[i * 6], vertices[i * 6 + 1]];
+  // Segment 1 ends with vertices 2 (right) and 5 (left); segment 2 starts with 6 (left) and 7 (right).
+  assert.deepEqual(at(2), at(7));
+  assert.deepEqual(at(5), at(6));
+  // The corner vertices sit on the diagonal offsets of the turn, not past the end of either segment.
+  const [rx, ry] = at(2);
+  assert.ok(Math.abs(rx - (50 - 1.45)) < 1e-9 && Math.abs(ry - 1.45) < 1e-9, `inner corner ${rx},${ry}`);
+  assert.equal(vertices.length / 6, 12, 'two quads, no extra caps');
+});
+
+test('route ends enter the building footprint', () => {
+  const b = { x: 10, y: 10, w: 20, h: 10 };
+  const [x, y] = enterBuilding([20, 4], b, .8);
+  assert.ok(x === 20 && Math.abs(y - 10.8) < 1e-9, `${x},${y}`);
+  const corner = enterBuilding([5, 5], b, 1);
+  assert.ok(corner[0] > 10 && corner[1] > 10 && corner[0] < 11 && corner[1] < 11);
 });

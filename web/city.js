@@ -648,19 +648,43 @@ export const ROUTE_KIND = { knownImport: 0, inferredImport: 1, dependent: 2 };
 export function ribbonVertices(routes, width = 1.3, z = .45, lane = .8) {
   const vertices = [];
   for (const route of routes) {
+    // Drop repeated points so every segment has a direction.
+    const points = route.points.filter((p, i, all) => i === 0 || Math.hypot(p[0] - all[i - 1][0], p[1] - all[i - 1][1]) > 1e-3);
+    if (points.length < 2) continue;
+    // Right-of-travel normal per segment: (-dy, dx) in this left-handed world (see heading()).
+    const normals = [];
+    for (let i = 1; i < points.length; i++) {
+      const dx = points[i][0] - points[i - 1][0], dy = points[i][1] - points[i - 1][1], length = Math.hypot(dx, dy);
+      normals.push([-dy / length, dx / length]);
+    }
+    // Mitred offsets at each vertex, so neighbouring segments share their corner edge exactly
+    // instead of overlapping. Very sharp turns fall back to the outgoing normal.
+    const mitre = i => {
+      const a = normals[Math.max(0, i - 1)], b = normals[Math.min(normals.length - 1, i)], dot = a[0] * b[0] + a[1] * b[1];
+      if (1 + dot < .25) return b;
+      return [(a[0] + b[0]) / (1 + dot), (a[1] + b[1]) / (1 + dot)];
+    };
     let along = 0;
-    for (let i = 1; i < route.points.length; i++) {
-      const [ax, ay] = route.points[i - 1], [bx, by] = route.points[i], length = Math.hypot(bx - ax, by - ay);
-      if (length < 1e-3) continue;
-      // Right of travel is (-dy, dx) in this left-handed world (see heading()). Each segment also runs
-      // half a width past both ends so corners overlap instead of leaving notches.
-      const dx = (bx - ax) / length, dy = (by - ay) / length, rx = -dy, ry = dx;
-      const ox = rx * lane, oy = ry * lane, ex = dx * width / 2, ey = dy * width / 2, hx = rx * width / 2, hy = ry * width / 2;
-      const p0 = [ax - ex + ox, ay - ey + oy], p1 = [bx + ex + ox, by + ey + oy], a0 = along - width / 2, a1 = along + length + width / 2;
-      const v = (p, side, a) => vertices.push(p[0] + hx * side, p[1] + hy * side, z, side, a, route.kind);
-      v(p0, -1, a0); v(p0, 1, a0); v(p1, 1, a1); v(p0, -1, a0); v(p1, 1, a1); v(p1, -1, a1);
-      along += length;
+    const edge = points.map((p, i) => {
+      if (i) along += Math.hypot(p[0] - points[i - 1][0], p[1] - points[i - 1][1]);
+      const m = mitre(i);
+      return { left: [p[0] + m[0] * (lane - width / 2), p[1] + m[1] * (lane - width / 2)], right: [p[0] + m[0] * (lane + width / 2), p[1] + m[1] * (lane + width / 2)], along };
+    });
+    for (let i = 1; i < edge.length; i++) {
+      const a = edge[i - 1], b = edge[i];
+      const v = (p, side, at) => vertices.push(p[0], p[1], z, side, at, route.kind);
+      v(a.left, -1, a.along); v(a.right, 1, a.along); v(b.right, 1, b.along);
+      v(a.left, -1, a.along); v(b.right, 1, b.along); v(b.left, -1, b.along);
     }
   }
   return vertices;
+}
+
+// Extends a route end from the street into a building: to the nearest point of its footprint, then
+// `depth` metres inside, so the path visibly runs up to (and under) the wall.
+export function enterBuilding(point, b, depth = .8) {
+  const nx = Math.max(b.x, Math.min(point[0], b.x + b.w)), ny = Math.max(b.y, Math.min(point[1], b.y + b.h));
+  const dx = nx - point[0], dy = ny - point[1], length = Math.hypot(dx, dy);
+  if (length < 1e-6) return [nx, ny];
+  return [nx + dx / length * depth, ny + dy / length * depth];
 }

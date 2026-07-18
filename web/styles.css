@@ -372,6 +372,10 @@ button.source-card:hover > b { transform: translateX(3px); color: #fff; }
 .github-account { grid-column: 1 / -1; margin: 10px 0 0; color: var(--muted); font-size: 11.5px; }
 .github-account a, .github-account button { padding: 0; border: 0; background: none; color: #cfc8ff; font: inherit; text-decoration: none; border-bottom: 1px solid rgba(207,200,255,.35); cursor: pointer; }
 .github-account a:hover, .github-account button:hover { color: #fff; border-bottom-color: #fff; }
+.github-notice { margin: 0 0 4px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); font-weight: 500; }
+.github-notice[data-tone="ok"] { border-color: rgba(54,211,160,.5); background: rgba(54,211,160,.1); }
+.github-notice[data-tone="warn"] { border-color: rgba(242,201,76,.5); background: rgba(242,201,76,.1); }
+.github-notice[data-tone="error"] { border-color: rgba(255,107,122,.5); background: rgba(255,107,122,.1); }
 .form-error { grid-column: 1 / -1; min-height: 16px; margin: 6px 0 -6px; color: var(--danger); font-size: 11px; }
 .dialog-foot { display: flex; gap: 8px; align-items: center; margin: 16px 2px 0; color: var(--dim); font-size: 11px; line-height: 1.6; }
 .dialog-foot::before { content: ""; flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px rgba(54,211,160,.7); }

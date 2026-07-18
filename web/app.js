@@ -1258,7 +1258,7 @@ async function uploadLocal(name,chosen){
 }
 
 $('#githubButton').addEventListener('click',startGithub);$('#githubInput').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();startGithub();}});
-async function startGithub(){const url=$('#githubInput').value.trim();$('#githubError').textContent='';if(!/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?(?:\.git)?$/.test(url)){ $('#githubError').textContent='Enter a GitHub owner/repository URL.';return;}lastGithubUrl=url;dialog.close();showProgress('Cloning repository','Connecting to GitHub…',0,0);try{const response=await apiFetch(apiUrl('/api/jobs'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'github',url,name:url.split('/').filter(Boolean).pop()?.replace(/\.git$/,'')})});const payload=await response.json();if(!response.ok)throw new Error(payload.error||'Could not start indexing');watchJob(payload.jobId);}catch(error){showError(error.message);}}
+async function startGithub(){const url=$('#githubInput').value.trim();$('#githubError').textContent='';$('#githubNotice').hidden=true;if(!/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?(?:\.git)?$/.test(url)){ $('#githubError').textContent='Enter a GitHub owner/repository URL.';return;}lastGithubUrl=url;dialog.close();showProgress('Cloning repository','Connecting to GitHub…',0,0);try{const response=await apiFetch(apiUrl('/api/jobs'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'github',url,name:url.split('/').filter(Boolean).pop()?.replace(/\.git$/,'')})});const payload=await response.json();if(!response.ok)throw new Error(payload.error||'Could not start indexing');watchJob(payload.jobId);}catch(error){showError(error.message);}}
 
 let activeJobStream=null;
 async function watchJob(jobId){
@@ -1303,13 +1303,24 @@ async function loadGithubStatus(){
     if(githubStatus.installUrl)account.append(' · ',Object.assign(document.createElement('a'),{href:githubStatus.installUrl,textContent:'Choose repositories'}));
   }else account.append('Private repository? ',Object.assign(document.createElement('a'),{href:apiUrl('/api/github/login'),textContent:'Sign in with GitHub'}));
 }
+// Back from GitHub (sign-in, cancel or app installation): open the Open codebase dialog with the
+// outcome at the top and any repository the visitor was trying to open ready to go.
 async function resumeAfterGithub(){
   const params=new URLSearchParams(location.search),outcome=params.get('github')||(params.get('setup_action')?'installed':'');
   if(!outcome)return;
-  window.history.replaceState(null,'',location.pathname);
+  window.history.replaceState(null,'',location.pathname+location.hash);
   let pending='';try{pending=sessionStorage.getItem('codenav.pendingRepo')||'';sessionStorage.removeItem('codenav.pendingRepo');}catch{}
-  if(outcome==='denied'||outcome==='error'){showError(outcome==='denied'?'GitHub sign-in was cancelled.':'GitHub sign-in failed. Please try again.');return;}
-  if(pending){$('#githubInput').value=pending;startGithub();}
+  const notices={
+    connected:['ok',githubStatus.login?`Signed in to GitHub as ${githubStatus.login}. Private repos unlocked.`:'Signed in to GitHub.'],
+    installed:['ok','GitHub access updated. Try that repo again.'],
+    denied:['warn','GitHub sign-in was cancelled. Public repos still work.'],
+    error:['error','GitHub sign-in failed. Give it another go.'],
+  };
+  const [tone,message]=notices[outcome]||notices.error;
+  const notice=$('#githubNotice');notice.hidden=false;notice.dataset.tone=tone;notice.textContent=message;
+  if(pending)$('#githubInput').value=pending;
+  if(!dialog.open)dialog.showModal();
+  requestAnimationFrame(()=>(pending&&tone==='ok'?$('#githubButton'):$('#githubInput')).focus());
 }
 
 async function checkBackend(){

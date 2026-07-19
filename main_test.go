@@ -107,6 +107,7 @@ func (c client) json(method, path, body string, wantStatus int, out any) {
 
 func newTestServer(t *testing.T) (*Server, client) {
 	server := NewServer(filepath.Join(t.TempDir(), "codenavigator"))
+	server.showLocal = true // most tests index local folders
 	ts := httptest.NewServer(server)
 	t.Cleanup(ts.Close)
 	return server, client{t, ts.URL, nil}.stranger()
@@ -240,7 +241,7 @@ func TestRoutesAndHeaders(t *testing.T) {
 		t.Fatalf("preflight = %d %v", res.StatusCode, res.Header)
 	}
 
-	for path, contentType := range map[string]string{"/": "text/html", "/api.mjs": "text/javascript", "/styles.css": "text/css", "/config.js": "text/javascript", "/inter-latin.woff2": "font/woff2"} {
+	for path, contentType := range map[string]string{"/": "text/html", "/api.mjs": "text/javascript", "/styles.css": "text/css", "/config.js": "text/javascript", "/fonts/archivo-black.woff2": "font/woff2"} {
 		res, err := http.Get(c.url + path)
 		if err != nil {
 			t.Fatal(err)
@@ -433,4 +434,29 @@ func TestProgressStreamSendsKeepAlivesWhileQueued(t *testing.T) {
 	if job.SnapshotID == nil {
 		t.Fatalf("stream ended without a snapshot: %+v", job)
 	}
+}
+
+func TestLocalFoldersDisabledByDefault(t *testing.T) {
+	t.Setenv("SHOW_LOCAL", "")
+	server := NewServer(filepath.Join(t.TempDir(), "codenavigator"))
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+	c := client{t, ts.URL, nil}.stranger()
+	var health map[string]any
+	c.json("GET", "/api/health", "", 200, &health)
+	if health["localFolders"] != false {
+		t.Fatalf("health = %v", health)
+	}
+	c.json("POST", "/api/jobs", `{"kind":"local"}`, 403, nil)
+	c.json("POST", "/api/jobs", `{"kind":"mystery"}`, 400, nil)
+
+	t.Setenv("SHOW_LOCAL", "true")
+	enabled := httptest.NewServer(NewServer(filepath.Join(t.TempDir(), "codenavigator")))
+	defer enabled.Close()
+	on := client{t, enabled.URL, nil}.stranger()
+	on.json("GET", "/api/health", "", 200, &health)
+	if health["localFolders"] != true {
+		t.Fatalf("health with SHOW_LOCAL=true = %v", health)
+	}
+	on.json("POST", "/api/jobs", `{"kind":"local"}`, 201, nil)
 }

@@ -71,6 +71,7 @@ type Server struct {
 	github      githubApp
 	authMu      sync.Mutex
 	auth        map[string]*githubAuth // by session ID
+	showLocal   bool                   // SHOW_LOCAL=true allows uploading local folders
 }
 
 func init() {
@@ -93,6 +94,7 @@ func NewServer(workspace string) *Server {
 		indexSlots: make(chan struct{}, maxIndexing),
 		github:     githubAppFromEnv(),
 		auth:       map[string]*githubAuth{},
+		showLocal:  os.Getenv("SHOW_LOCAL") == "true",
 	}
 }
 
@@ -138,7 +140,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodOptions:
 		w.WriteHeader(http.StatusNoContent)
 	case path == "/api/health" && r.Method == http.MethodGet:
-		writeJSON(w, 200, map[string]any{"ok": true, "version": "0.1.0"})
+		writeJSON(w, 200, map[string]any{"ok": true, "version": "0.1.0", "localFolders": s.showLocal})
 	case path == "/api/jobs" && r.Method == http.MethodPost:
 		s.createJob(w, r)
 	case strings.HasPrefix(path, "/api/jobs/"):
@@ -161,6 +163,14 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 		URL  *string `json:"url"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&request); err != nil || request.Kind == "" {
+		writeError(w, 400, "Invalid job request")
+		return
+	}
+	switch {
+	case request.Kind == "local" && !s.showLocal:
+		writeError(w, 403, "Local folders are disabled on this server")
+		return
+	case request.Kind != "local" && request.Kind != "github":
 		writeError(w, 400, "Invalid job request")
 		return
 	}

@@ -17,15 +17,15 @@ export class ShelfPacker {
 
 const STYLES = {
   // Name plates on roofs and walls.
-  plate: { font: '600 30px Inter, system-ui, sans-serif', text: '#f1f3f8', fill: 'rgba(10,12,18,.9)', border: 'rgba(255,255,255,.14)' },
-  selected: { font: '700 30px Inter, system-ui, sans-serif', text: '#1a1405', fill: 'rgba(255,236,140,.96)', border: 'rgba(255,255,255,.5)' },
+  plate: { font: '700 30px "Atkinson Hyperlegible", system-ui, sans-serif', text: '#f1f3f8', fill: 'rgba(10,12,18,.9)', border: 'rgba(255,255,255,.14)' },
+  selected: { font: '700 30px "Atkinson Hyperlegible", system-ui, sans-serif', text: '#1a1405', fill: 'rgba(255,236,140,.96)', border: 'rgba(255,255,255,.5)' },
   // Folder blades at street corners, in street-sign green.
-  street: { font: '600 30px Inter, system-ui, sans-serif', text: '#f4fff9', fill: 'rgba(14,112,76,.96)', border: 'rgba(255,255,255,.55)' },
+  street: { font: '700 30px "Atkinson Hyperlegible", system-ui, sans-serif', text: '#f4fff9', fill: 'rgba(14,112,76,.96)', border: 'rgba(255,255,255,.55)' },
   // Hazard tape: square-cut, edge to edge, with warning stripes where the repeated label joins.
-  tapeDependabot: { font: '800 28px Inter, system-ui, sans-serif', text: '#141414', fill: '#f5c518', stripe: '#141414', tape: true },
-  tapeCodeScanning: { font: '800 28px Inter, system-ui, sans-serif', text: '#ffffff', fill: '#d7263d', stripe: '#ffffff', tape: true },
+  tapeDependabot: { font: '400 28px "Archivo Black", Impact, sans-serif', text: '#141414', fill: '#f5c518', stripe: '#141414', tape: true },
+  tapeCodeScanning: { font: '400 28px "Archivo Black", Impact, sans-serif', text: '#ffffff', fill: '#d7263d', stripe: '#ffffff', tape: true },
   // District and street names painted on the ground.
-  ground: { font: '700 34px Inter, system-ui, sans-serif', text: 'rgba(205,198,255,.9)' },
+  ground: { font: '400 34px "Archivo Black", Impact, sans-serif', text: 'rgba(205,198,255,.9)' },
 };
 
 export class LabelAtlas {
@@ -166,9 +166,9 @@ function paintPoster(ctx, { title, body }, w, h, theme, variant) {
   const shape = variant % 4;
   if (shape === 0) { ctx.beginPath(); ctx.arc(w / 2, 100, 50, 0, Math.PI * 2); ctx.fill(); }
   else if (shape === 1) { for (let i = 0; i < 8; i++) { const x = inset + i * 44; ctx.beginPath(); ctx.moveTo(x, inset); ctx.lineTo(x + 22, inset); ctx.lineTo(x - 30, 150); ctx.lineTo(x - 52, 150); ctx.fill(); } }
-  else if (shape === 2) { ctx.beginPath(); ctx.moveTo(w / 2, 40); ctx.lineTo(w / 2 + 64, 160); ctx.lineTo(w / 2 - 64, 160); ctx.closePath(); ctx.fill(); ctx.fillStyle = theme.paper; ctx.font = '900 64px Inter, system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.fillText('!', w / 2, 150); }
+  else if (shape === 2) { ctx.beginPath(); ctx.moveTo(w / 2, 40); ctx.lineTo(w / 2 + 64, 160); ctx.lineTo(w / 2 - 64, 160); ctx.closePath(); ctx.fill(); ctx.fillStyle = theme.paper; ctx.font = '400 64px "Archivo Black", Impact, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.fillText('!', w / 2, 150); }
   else { for (const y of [40, 84, 128]) ctx.fillRect(inset, y, pw, 22); }
-  const font = (weight, size) => `${weight} ${size}px Inter, system-ui, sans-serif`;
+  const font = (weight, size) => weight >= 900 ? `400 ${size}px "Archivo Black", Impact, sans-serif` : `${weight >= 600 ? 700 : 400} ${size}px "Atkinson Hyperlegible", system-ui, sans-serif`;
   const measure = weight => (text, size) => { ctx.font = font(weight, size); return ctx.measureText(text).width; };
   const footer = 30, textTop = 176, textWidth = pw - pad * 2, textBottom = h - inset - footer;
   const titleFit = fitText(measure(900), title.toUpperCase(), textWidth, (textBottom - textTop) * .55, 34, 14, 3);

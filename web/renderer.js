@@ -107,7 +107,7 @@ void main(){
     outColor = vec4(vColor.rgb * pow(1.0 - vUnit.z, 1.6) * .55, 0.0);
     return;
   }
-  if(vKind.x == 2){ outColor = vec4(fog(vec3(.03, .036, .052)), uAlpha); return; } // asphalt
+  if(vKind.x == 2){ outColor = vec4(fog(vec3(.035, .032, .028)), uAlpha); return; } // asphalt
   if(vKind.x == 4){
     // City wall: concrete courses and panel joints in metres, lit coping along the top.
     vec2 faceUv = vFace == 0 || vFace == 5 ? vUnit.xy : vFace < 3 ? vUnit.xz : vUnit.yz;
@@ -117,7 +117,7 @@ void main(){
     if(vFace == 0) concrete = vec3(.2, .21, .26);
     float edgeWall = min(min(faceUv.x, 1.0 - faceUv.x), min(faceUv.y, 1.0 - faceUv.y));
     float rim = 1.0 - smoothstep(0.0, fwidth(edgeWall) * 1.5 + .002, edgeWall);
-    outColor = vec4(fog(mix(concrete, vec3(.55, .5, 1.0) * .8, rim * step(.9, vUnit.z + (vFace == 0 ? 1.0 : 0.0)))), uAlpha);
+    outColor = vec4(fog(mix(concrete, vec3(.78, .95, .21) * .8, rim * step(.9, vUnit.z + (vFace == 0 ? 1.0 : 0.0)))), uAlpha);
     return;
   }
 #endif
@@ -126,7 +126,7 @@ void main(){
   float edge = min(min(face.x, 1.0-face.x), min(face.y, 1.0-face.y));
   float border = smoothstep(0.0, fwidth(edge)*1.35 + .009, edge);
   // Tile tops match TILE_TOP in app.js so source drawn over a roof blends in; 2D gets a faint layer tint.
-  vec3 top = vec3(.055, .067, .094);
+  vec3 top = vec3(.086, .078, .059);
   vec3 base = uMode < .5 ? mix(top, vColor.rgb, .07) : top;
 #ifdef CITY
   vec3 stroke = mix(vColor.rgb, vec3(1.0), .3) * 1.2; // neon edges at night
@@ -173,7 +173,7 @@ void main(){ gl_Position = projectWorld(vec3(aPoint, 0.0)); }`;
 const GRID_FS = `#version 300 es
 precision highp float;
 out vec4 outColor;
-void main(){ outColor = vec4(.59, .63, 1.0, .11); }`;
+void main(){ outColor = vec4(.95, .92, .86, .08); }`;
 
 // Textured quads for city signs and facades: centre, half-width axis, half-height axis, atlas rect.
 const SIGN_VS = `#version 300 es
@@ -726,7 +726,7 @@ export class LandscapeRenderer {
 
   render(alpha = 1) {
     const gl = this.gl; this.resize();
-    const fogColor = [.027, .031, .05], fog = this.fogDensity();
+    const fogColor = [.05, .045, .038], fog = this.fogDensity();
     if (this.mode === 'city') gl.clearColor(...fogColor, 1); else gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);

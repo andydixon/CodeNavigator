@@ -3,46 +3,45 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#0b0d13">
+  <meta name="theme-color" content="#1e1b16">
   <meta name="description" content="Explore an entire codebase as a fast, searchable 2D and 3D landscape.">
   <title>CodeNavigator</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
-  <link rel="preload" href="./inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="./fonts/archivo-black.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="./fonts/atkinson-400.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
   <main id="app">
     <header class="toolbar" aria-label="Codebase controls">
-      <div class="brand" aria-label="CodeNavigator"><svg viewBox="0 0 28 28" aria-hidden="true"><defs><linearGradient id="brandGradient" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9a7dff"/><stop offset=".5" stop-color="#5f9dff"/><stop offset="1" stop-color="#36d3c2"/></linearGradient></defs><rect x="3" y="11" width="6" height="14" rx="1.6" fill="url(#brandGradient)" opacity=".7"/><rect x="11" y="3" width="6" height="22" rx="1.6" fill="url(#brandGradient)"/><rect x="19" y="15" width="6" height="10" rx="1.6" fill="url(#brandGradient)" opacity=".5"/></svg><span class="brand-name">Code<em>Navigator</em></span></div>
-      <div class="tool-group">
-        <button class="tool primary" id="loadButton" title="Open codebase" aria-label="Open codebase"><svg viewBox="0 0 24 24"><path d="M3.5 7.5h6l2-2h4l2 2h3v11h-17z"/><path d="M3.5 9.5h17"/></svg></button>
-        <button class="tool active" id="mapButton" title="Code landscape" aria-label="Code landscape"><svg viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="2"/><path d="M3.5 10h17M10 3.5v17M10 15h10.5"/></svg></button>
-        <button class="tool" id="layersButton" title="Semantic layers" aria-label="Semantic layers"><svg viewBox="0 0 24 24"><path d="m4 8 8-4 8 4-8 4zM4 12l8 4 8-4M4 16l8 4 8-4"/></svg></button>
+      <div class="brand" aria-label="CodeNavigator"><svg viewBox="0 0 28 28" aria-hidden="true"><rect x="2.5" y="10" width="7" height="15" rx="1" fill="#c8f135" stroke="#000" stroke-width="1.6"/><rect x="10.5" y="3" width="7" height="22" rx="1" fill="#ff5ea8" stroke="#000" stroke-width="1.6"/><rect x="18.5" y="14" width="7" height="11" rx="1" fill="#5cc8ff" stroke="#000" stroke-width="1.6"/></svg><span class="brand-name">Code<em>Navigator</em></span></div>
+      <button class="tool primary" id="loadButton" title="Open a codebase (Ctrl+O)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5h6l2-2h4l2 2h3v11h-17z"/><path d="M3.5 9.5h17"/></svg><span class="label">Open</span></button>
+      <div class="tool-group" role="group" aria-label="View mode">
+        <button class="tool active" data-view="2d" title="Flat map"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="1.5"/><path d="M3.5 11h17M12 3.5v17"/></svg><span class="label">2D</span></button>
+        <button class="tool" data-view="3d" title="3D landscape"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9zM4 7.5l8 4.5 8-4.5M12 12v9"/></svg><span class="label">3D</span></button>
+        <button class="tool" data-view="city" title="Walkable city"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 21h18M5 21V10l4-2v13M9 21V4l6 3v14M15 21v-9l4-1.5V21"/></svg><span class="label">City</span></button>
       </div>
-      <span class="separator"></span>
-      <div class="tool-group view-switch" role="group" aria-label="View mode">
-        <button class="tool active" data-view="2d" title="Flat map" aria-label="Flat map"><svg viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="1.5"/><path d="M3.5 11h17M12 3.5v17"/></svg></button>
-        <button class="tool" data-view="3d" title="3D landscape" aria-label="3D landscape"><svg viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9zM4 7.5l8 4.5 8-4.5M12 12v9"/></svg></button>
-        <button class="tool" data-view="city" title="City" aria-label="City"><svg viewBox="0 0 24 24"><path d="M3 21h18M5 21V10l4-2v13M9 21V4l6 3v14M15 21v-9l4-1.5V21"/><path d="M11.5 9v.01M11.5 12v.01M11.5 15v.01"/></svg></button>
-        <button class="tool" id="codeButton" title="Toggle source texture" aria-label="Toggle source texture"><svg viewBox="0 0 24 24"><path d="M4 18 9 6l4 8 2-5 5 9z"/><path d="M4 20h16"/></svg></button>
+      <div class="tool-group" role="group" aria-label="Map options">
+        <button class="tool" id="mapButton" title="Fit everything in view (F)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4"/></svg><span class="label">Fit</span></button>
+        <button class="tool" id="layersButton" title="Semantic layers"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 8 8-4 8 4-8 4zM4 12l8 4 8-4M4 16l8 4 8-4"/></svg><span class="label">Layers</span></button>
+        <button class="tool" id="codeButton" title="Show source code on tiles"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 7-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></svg><span class="label">Code</span></button>
+        <button class="tool icon-only" id="paletteButton" title="Change palette" aria-label="Change palette"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 13a8 8 0 1 0-8 7h1.5a1.5 1.5 0 0 0 0-3H12a2 2 0 0 1 0-4z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7.5" r="1"/><circle cx="14.5" cy="7.5" r="1"/></svg></button>
       </div>
-      <span class="separator"></span>
-      <div class="metric-switch" role="group" aria-label="Map metric">
-        <button class="metric active" data-metric="lines"><b>#</b> <span>Lines</span></button>
-        <button class="metric" data-metric="references"><b>⌁</b> <span>References</span></button>
+      <div class="tool-group metric-switch" role="group" aria-label="Map metric">
+        <button class="metric active" data-metric="lines" title="Size tiles by lines"><b>#</b> <span>Lines</span></button>
+        <button class="metric" data-metric="references" title="Size tiles by references"><b>⌁</b> <span>Refs</span></button>
       </div>
-      <button class="tool palette" id="paletteButton" title="Change palette" aria-label="Change palette"><svg viewBox="0 0 24 24"><path d="M20 13a8 8 0 1 0-8 7h1.5a1.5 1.5 0 0 0 0-3H12a2 2 0 0 1 0-4z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7.5" r="1"/><circle cx="14.5" cy="7.5" r="1"/><circle cx="17" cy="11" r="1"/></svg></button>
       <div class="toolbar-spacer"></div>
       <div class="scene-stats" id="sceneStats" aria-live="polite">
-        <span id="headlineStats">No codebase loaded</span>
-        <small id="fileStats">Open a folder or public repository</small>
+        <span id="headlineStats">no repo yet</span>
+        <small id="fileStats">nothing open yet</small>
       </div>
       <label class="filter-wrap">
         <span class="sr-only">Filter files and symbols</span>
-        <input id="searchInput" type="search" placeholder="Find a file or symbol…" autocomplete="off" spellcheck="false">
+        <input id="searchInput" type="search" placeholder="find a file or symbol" autocomplete="off" spellcheck="false">
         <kbd>/</kbd>
       </label>
-      <button class="tool" id="settingsButton" title="Performance details" aria-label="Performance details" aria-haspopup="dialog" aria-controls="settingsDialog"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 13.5v-3l-2-.7-.7-1.7.9-1.9-2.1-2.1-1.9.9-1.7-.7-.7-2h-3l-.7 2-1.7.7-1.9-.9-2.1 2.1.9 1.9-.7 1.7-2 .7v3l2 .7.7 1.7-.9 1.9 2.1 2.1 1.9-.9 1.7.7.7 2h3l.7-2 1.7-.7 1.9.9 2.1-2.1-.9-1.9.7-1.7z"/></svg></button>
+      <button class="tool icon-only" id="settingsButton" title="Settings" aria-label="Settings" aria-haspopup="dialog" aria-controls="settingsDialog"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="m9.5 3-.5 2-2 1-2-.5L3 9l1.5 1.5v3L3 15l2 3.5 2-.5 2 1 .5 2h5l.5-2 2-1 2 .5 2-3.5-1.5-1.5v-3L21 9l-2-3.5-2 .5-2-1-.5-2z"/></svg></button>
       <span class="live-dot" role="status" aria-label="Connecting to indexer" title="Connecting to indexer"></span>
     </header>
 
@@ -51,15 +50,16 @@
         <canvas id="glCanvas"></canvas>
         <canvas id="overlayCanvas"></canvas>
         <div class="welcome" id="welcome">
-          <span class="eyebrow"><i></i>Codebase landscapes</span>
-          <h1>See your code<br><span>as a place.</span></h1>
-          <p>Every file becomes a tile sized by its lines, grouped by folder and coloured by purpose. Fly over it in 2D or 3D, search every symbol, and follow imports from file to file.</p>
-          <div class="welcome-actions"><button type="button" class="button-primary" id="welcomeOpen">Open a codebase</button><span><kbd>Ctrl</kbd> <kbd>O</kbd></span></div>
-          <div class="welcome-features"><span>Public &amp; private GitHub repos</span><span>Local folders</span><span>Symbol search</span><span>Import graph</span></div>
+          <span class="eyebrow"><i></i>code, but it's a place now</span>
+          <h1>See your code<br><span>as a city.</span></h1>
+          <div class="welcome-sticker" aria-hidden="true">now with fire<small>(security alerts)</small></div>
+          <p>Every file is a building, every folder a street. <b>Fly over it, walk around it, get lost in it.</b> Search every symbol, follow imports door to door, and watch the insecure bits smoulder.</p>
+          <div class="welcome-actions"><button type="button" class="button-primary" id="welcomeOpen">Open a codebase →</button><span>or hit <kbd>Ctrl</kbd> <kbd>O</kbd></span></div>
+          <div class="welcome-features"><span>public + private GitHub</span><span class="local-only">local folders</span><span>walkable cities</span><span>import routes</span><span>things on fire</span><span>little people</span></div>
         </div>
         <div class="empty-state" id="emptyState" hidden>
-          <strong>No source files found</strong>
-          <span>Try another folder or public GitHub repository.</span>
+          <strong>Nothing to see here</strong>
+          <span>No source files in there. Try another repo?</span>
         </div>
         <div class="progress-card" id="progressCard" role="status" aria-live="polite" hidden>
           <button type="button" class="progress-dismiss close-button" id="dismissProgress" aria-label="Dismiss notification"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
@@ -82,14 +82,13 @@
           <span><b>F</b> reset</span>
         </div>
         <div class="city-hud" id="cityHud" hidden>
-          <div class="city-views" role="group" aria-label="City camera">
-            <button type="button" data-city-view="heli" title="Helicopter (1)"><kbd>1</kbd> Helicopter</button>
-            <button type="button" data-city-view="walk" title="Walk (2)"><kbd>2</kbd> Walk</button>
-            <button type="button" data-city-view="fly" title="Fly (3)"><kbd>3</kbd> Fly</button>
-          </div>
-          <div class="city-actions">
-            <button type="button" id="tourButton" title="Guided tour (T)">Tour</button>
-            <button type="button" id="shareButton" title="Copy a link to this place">Copy link</button>
+          <div class="city-row" role="group" aria-label="City camera">
+            <button type="button" class="chip" data-city-view="heli" title="Helicopter (1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M12 6v3M6 13a6 4 0 0 0 12 0 6 4 0 0 0-12 0zM18 13h3M9 17l-2 3M15 17l2 3"/></svg><span class="label">Heli</span><kbd>1</kbd></button>
+            <button type="button" class="chip" data-city-view="walk" title="Walk (2)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="13" cy="4" r="2"/><path d="m9 21 2-6 3 2v4M8 11l3-3 3 1 2 3M11 8l-1 6"/></svg><span class="label">Walk</span><kbd>2</kbd></button>
+            <button type="button" class="chip" data-city-view="fly" title="Fly (3)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 16 22 8l-9 11-2-5z"/><path d="m11 14 11-6"/></svg><span class="label">Fly</span><kbd>3</kbd></button>
+            <span class="divider" aria-hidden="true"></span>
+            <button type="button" class="chip" id="tourButton" title="Guided tour (T)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7-6.5-7-12a7 7 0 0 1 14 0c0 5.5-7 12-7 12z"/><circle cx="12" cy="9" r="2.5"/></svg><span class="label">Tour</span><kbd>T</kbd></button>
+            <button type="button" class="chip" id="shareButton" title="Copy a link to this exact spot"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg><span class="label">Copy link</span></button>
           </div>
           <span class="city-help" id="cityHelp"></span>
         </div>
@@ -101,13 +100,14 @@
         <canvas class="minimap" id="minimap" width="220" height="150" hidden title="Click to travel"></canvas>
         <nav class="breadcrumb" id="breadcrumb" aria-label="Selected file path">
           <button id="homeButton" aria-label="Fit entire codebase">←</button>
-          <span id="breadcrumbText">No codebase loaded</span>
+          <span id="breadcrumbText">nothing open</span>
         </nav>
         <div class="fps" id="fps">— fps</div>
         <div class="legend" id="legend"></div>
         <div class="canvas-controls" aria-label="Landscape navigation"><button type="button" id="zoomOutButton" title="Zoom out" aria-label="Zoom out">−</button><button type="button" id="fitButton" title="Fit codebase (F)" aria-label="Fit codebase"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4"/></svg></button><button type="button" id="zoomInButton" title="Zoom in" aria-label="Zoom in">+</button></div>
       </div>
 
+      <button type="button" class="inspector-toggle" id="inspectorToggle" title="Hide the sidebar ([)" aria-controls="inspector" aria-expanded="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></button>
       <aside class="inspector" id="inspector">
         <div class="tabs" role="tablist">
           <button class="tab active" data-tab="inspector" role="tab">Inspector</button>
@@ -133,11 +133,11 @@
   <dialog id="loadDialog" aria-labelledby="loadTitle">
     <form method="dialog" class="dialog-shell">
       <div class="dialog-head">
-        <div><small>YOUR NEXT PERSPECTIVE</small><h1 id="loadTitle">Open a codebase</h1><p class="dialog-description">See the big picture. Explore every detail.</p></div>
+        <div><small>LET'S GO</small><h1 id="loadTitle">Open a codebase</h1><p class="dialog-description">Big repos welcome. Weird ones too.</p></div>
         <button class="close-button" value="cancel" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
       </div>
       <p class="github-notice" id="githubNotice" role="status" hidden></p>
-      <button type="button" class="source-card" id="localFolderButton">
+      <button type="button" class="source-card local-only" id="localFolderButton">
         <span class="source-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h7l2-2h4l2 2h3v12H3zM3 10h18"/></svg></span>
         <span><strong>Local folder</strong><small>Temporarily indexed by this server</small></span>
         <b>→</b>
@@ -156,7 +156,7 @@
   <dialog id="settingsDialog" class="settings-dialog" aria-labelledby="settingsTitle">
     <form method="dialog" class="dialog-shell settings-shell">
       <div class="dialog-head">
-        <div><small>MAKE IT YOURS</small><h1 id="settingsTitle">Workspace settings</h1><p class="dialog-description">A workspace that feels right for you.</p></div>
+        <div><small>FIDDLE WITH STUFF</small><h1 id="settingsTitle">Settings</h1><p class="dialog-description">Tweak it until it feels right.</p></div>
         <button class="close-button" value="cancel" aria-label="Close settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
       </div>
       <div id="settingsContent"></div>

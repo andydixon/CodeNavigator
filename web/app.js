@@ -118,7 +118,7 @@ function computeLayout(){
 function computeCity(){
   cityModel=layoutCity(files,currentName);
   const instances=[{x:-80,y:-80,w:cityModel.width+160,h:cityModel.height+160,height:.02,color:[0,0,0],kind:KIND.ground}];
-  for(const block of cityModel.blocks)if(block.depth>0)instances.push({x:block.x,y:block.y,w:block.w,h:block.h,height:.1+.06*Math.min(block.depth,4),color:[.55,.6,.9],kind:KIND.block});
+  for(const block of cityModel.blocks)if(block.depth>0)instances.push({x:block.x,y:block.y,w:block.w,h:block.h,height:.1+.06*Math.min(block.depth,4),color:[.95,.9,.78],kind:KIND.block});
   cityEntries=[];
   for(const item of layoutItems){
     const building=cityModel.buildings.get(item.id);if(!building)continue;
@@ -140,7 +140,7 @@ function computeCity(){
   cityFolders=cityModel.blocks.map(block=>({block,buildings:byDirectory.get(block.node.path)||[],label:folderLabel(block.node.path,currentName)})).filter(folder=>folder.buildings.length);
   const tally=node=>{let files=node.files.length,lines=node.files.reduce((n,f)=>n+(f.lines||0),0);for(const child of node.children.values()){const t=tally(child);files+=t.files;lines+=t.lines;}return{files,lines};};
   cityDistricts=cityModel.blocks.filter(block=>block.depth===1).map(block=>({block,...tally(block.node),top:Math.max(10,...[...cityIndex.near(block.x+block.w/2,block.y+block.h/2,Math.hypot(block.w,block.h)/2)].filter(b=>b.x>=block.x&&b.x+b.w<=block.x+block.w&&b.y>=block.y&&b.y+b.h<=block.y+block.h).map(b=>b.height))}));
-  for(const wall of cityWallBoxes)instances.push({...wall,color:[.55,.5,1],kind:KIND.wall});
+  for(const wall of cityWallBoxes)instances.push({...wall,color:[.78,.95,.21],kind:KIND.wall});
   pastePosters();
   renderer.setCity(instances,{width:cityModel.width,height:cityModel.height});
   buildMinimap();updateCityHud();updateTrails();updateRoutes();updateBeacons();signState.key='';facadeState={entry:null,texture:null};renderer.setFacade(null);
@@ -324,8 +324,8 @@ $('#tourButton').addEventListener('click',event=>{event.currentTarget.blur();tou
 // ---- Shareable places: repository, view, camera and file in the URL fragment ----
 let currentRepoUrl='';
 $('#shareButton').addEventListener('click',async event=>{
-  const button=event.currentTarget,label=button.textContent;button.blur();
-  const flash=text=>{button.textContent=text;setTimeout(()=>{button.textContent=label;},1800);};
+  const button=event.currentTarget,labelElement=button.querySelector('.label'),label=labelElement.textContent;button.blur();
+  const flash=text=>{labelElement.textContent=text;button.classList.add('done');setTimeout(()=>{labelElement.textContent=label;button.classList.remove('done');},1800);};
   if(!currentRepoUrl){flash('Needs a GitHub repo');return;}
   const hash=encodePlace({repo:currentRepoUrl,view:renderer.mode,camera:renderer.city,file:selected?.path});
   window.history.replaceState(null,'',hash);
@@ -372,8 +372,8 @@ function minimapTransform(){
 function buildMinimap(){
   const dpr=2,canvas=document.createElement('canvas');canvas.width=MINIMAP.width*dpr;canvas.height=MINIMAP.height*dpr;
   const ctx=canvas.getContext('2d'),{scale,ox,oy}=minimapTransform();ctx.scale(dpr,dpr);
-  ctx.strokeStyle='rgba(141,125,255,.55)';ctx.lineWidth=1.5;ctx.strokeRect(ox-WALL.margin*scale,oy-WALL.margin*scale,(cityModel.width+WALL.margin*2)*scale,(cityModel.height+WALL.margin*2)*scale);
-  ctx.fillStyle='rgba(141,125,255,.08)';
+  ctx.strokeStyle='rgba(200,241,53,.7)';ctx.lineWidth=1.5;ctx.strokeRect(ox-WALL.margin*scale,oy-WALL.margin*scale,(cityModel.width+WALL.margin*2)*scale,(cityModel.height+WALL.margin*2)*scale);
+  ctx.fillStyle='rgba(243,236,220,.06)';
   for(const block of cityModel.blocks)if(block.depth===1)ctx.fillRect(ox+block.x*scale,oy+block.y*scale,block.w*scale,block.h*scale);
   for(const item of layoutItems){const b=item.city;if(!b||!fileAlerts.has(item.path))continue;ctx.fillStyle='#ff4d3d';ctx.beginPath();ctx.arc(ox+(b.x+b.w/2)*scale,oy+(b.y+b.h/2)*scale,2.6,0,Math.PI*2);ctx.fill();}
   for(const item of layoutItems){const b=item.city;if(!b)continue;ctx.fillStyle=`rgba(${item.color.map(v=>Math.round(v*255)).join(',')},.85)`;ctx.fillRect(ox+b.x*scale,oy+b.y*scale,Math.max(.6,b.w*scale),Math.max(.6,b.h*scale));}
@@ -491,7 +491,7 @@ function escapeHtml(value=''){return String(value).replace(/[&<>"]/g,char=>({'&'
 
 const syntaxPalette={plain:'#b6bfd0',comment:'#5c667a',string:'#8fd694',number:'#f5a97f',keyword:'#c69cff',type:'#6ec6ff',function:'#7aa7ff',property:'#5fd3c6',operator:'#8f9ab0',constant:'#ff8fa3',tag:'#5fd3c6'};
 // Matches the renderer's tile top so code drawn over a 3D roof blends with the WebGL face.
-const TILE_TOP='#0e1118';
+const TILE_TOP='#16140f';
 const syntaxKeywords=new Set(`abstract as async await break case catch class const continue crate def default defer delete do else enum export extends extern false final finally fn for from func function get go if impl import in instanceof interface is lambda let loop match mod module mut namespace new nil None null of override package private protected pub public raise readonly require return self set static struct super switch this throw trait true try type typeof undefined union unsafe use using var virtual void where while with yield`.split(' '));
 const syntaxConstants=new Set('true false null nil none undefined nan infinity self this super'.split(' '));
 const tokenPattern=/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b0x[\da-f]+\b|\b0b[01]+\b|#[\da-f]{3,8}\b|\b\d+(?:\.\d+)?(?:e[+-]?\d+)?\b|[A-Za-z_$][\w$-]*|\s+|./gi;
@@ -605,9 +605,9 @@ function selectFile(file,addHistory=true){
 
 function renderInspector(){
   const hint=$('#inspectHint'),content=$('#inspectContent');
-  if(!files.length){hint.hidden=false;hint.textContent='Open a local folder or GitHub repository to begin.';content.innerHTML='';return;}
+  if(!files.length){hint.hidden=false;hint.textContent='Open a codebase to get going.';content.innerHTML='';return;}
   if(!selected){
-    hint.hidden=false;hint.textContent=expandedCoverageLayer?'Click a file or use ↑ and ↓ to move around the map':'Select an entity on the map';
+    hint.hidden=false;hint.textContent=expandedCoverageLayer?'Click a file or use ↑ and ↓ to move around the map':'Click anything on the map. Go on.';
     const coverageRows=Object.entries(layerLabels).map(([key,label])=>`<button class="coverage-row${expandedCoverageLayer===key?' active':''}" type="button" data-coverage-layer="${key}" aria-expanded="${expandedCoverageLayer===key}"><i style="background:${palettes[paletteIndex][key]}"></i><span>${label}</span><small>${format(sceneStats.layers.get(key)||0)}</small><b aria-hidden="true">${expandedCoverageLayer===key?'−':'+'}</b></button>`).join('');
     const expandedLabel=layerLabels[expandedCoverageLayer];
     content.innerHTML=`<div class="entity-title"><small>Coverage · ${escapeHtml(currentName)}</small><h2>${format(files.length)} indexed files</h2></div><div class="meta-grid"><span>known links</span><b>${format(sceneStats.known)}</b><span>inferred links</span><b>${format(sceneStats.inferred)}</b><span>definitions</span><b>${format(sceneStats.definitions)}</b><span>source lines</span><b>${format(sceneStats.totalLines)}</b><span>security alerts</span><b>${alertSummary()}</b></div><div class="section-title coverage-title"><span>Semantic coverage</span><small>Click a section</small></div><div class="coverage-menu">${coverageRows}</div>${expandedCoverageLayer?`<div class="coverage-list-head"><span>${escapeHtml(expandedLabel)}</span><small>Click or ↑ ↓ to navigate</small></div><div class="coverage-file-list" id="coverageFileList" tabindex="0" role="listbox" aria-label="${escapeHtml(expandedLabel)} files"><div class="coverage-list-spacer" id="coverageListSpacer"></div><div class="coverage-list-window" id="coverageListWindow"></div></div>`:''}`;
@@ -696,7 +696,7 @@ $$('.tab').forEach(tab=>tab.addEventListener('click',()=>switchTab(tab.dataset.t
 function resizeOverlay(){const dpr=Math.min(devicePixelRatio||1,2),w=Math.floor(overlay.clientWidth*dpr),h=Math.floor(overlay.clientHeight*dpr);if(overlay.width!==w||overlay.height!==h){overlay.width=w;overlay.height=h;}overlayCtx.setTransform(dpr,0,0,dpr,0,0);}
 function drawChip(ctx,text,x,y,maxWidth,accent,occupied,force=false,align='left'){
   if(maxWidth<24)return false;
-  ctx.font='600 11px Inter, system-ui, sans-serif';
+  ctx.font='600 11px "Space Mono", ui-monospace, monospace';
   let label=text;
   if(ctx.measureText(label).width>maxWidth-10){let low=1,high=label.length;while(low<high){const mid=Math.ceil((low+high)/2);if(ctx.measureText(`${label.slice(0,mid)}…`).width<=maxWidth-10)low=mid;else high=mid-1;}label=`${label.slice(0,low)}…`;}
   const width=Math.min(maxWidth,ctx.measureText(label).width+10);
@@ -704,7 +704,7 @@ function drawChip(ctx,text,x,y,maxWidth,accent,occupied,force=false,align='left'
   const box={x:x-3,y:y-2,w:width+6,h:21};
   if(!force&&occupied?.some(other=>box.x<other.x+other.w&&box.x+box.w>other.x&&box.y<other.y+other.h&&box.y+box.h>other.y))return false;
   occupied?.push(box);
-  ctx.fillStyle='rgba(10,12,18,.88)';ctx.fillRect(x,y,width,17);
+  ctx.fillStyle='rgba(21,19,15,.92)';ctx.fillRect(x,y,width,17);
   if(accent){ctx.fillStyle=accent;ctx.fillRect(x,y,2,17);}
   ctx.fillStyle='rgba(237,241,238,.94)';ctx.fillText(label,x+5,y+2);
   return true;
@@ -716,7 +716,7 @@ function drawFileChip(ctx,item,rect,accent,occupied,force=false){
   return drawChip(ctx,item.name,anchor.x,anchor.y-8,maxWidth,accent,occupied,force,'center');
 }
 function drawOverlay(){
-  resizeOverlay();const ctx=overlayCtx,w=overlay.clientWidth,h=overlay.clientHeight;ctx.clearRect(0,0,w,h);ctx.save();ctx.font='600 11px Inter, system-ui, sans-serif';ctx.textBaseline='top';
+  resizeOverlay();const ctx=overlayCtx,w=overlay.clientWidth,h=overlay.clientHeight;ctx.clearRect(0,0,w,h);ctx.save();ctx.font='600 11px "Space Mono", ui-monospace, monospace';ctx.textBaseline='top';
   codeTexturesPending=false;
   codeTextureDeadline=performance.now()+5;
   if(renderer.mode==='city'){visibleScreenItems=[];drawCityOverlay();ctx.restore();return;}
@@ -1242,6 +1242,7 @@ window.addEventListener('resize',()=>{dirty=true;});
 
 const dialog=$('#loadDialog');$('#loadButton').addEventListener('click',()=>dialog.showModal());$('#welcomeOpen').addEventListener('click',()=>dialog.showModal());
 $('#localFolderButton').addEventListener('click',async()=>{
+  if(!localFoldersEnabled)return;
   dialog.close();
   if('showDirectoryPicker' in window){try{const handle=await window.showDirectoryPicker();const chosen=[];await collectHandles(handle,'',chosen);await uploadLocal(handle.name,chosen);}catch(error){if(error.name!=='AbortError')showError(error.message);}}
   else $('#folderFallback').click();
@@ -1323,12 +1324,17 @@ async function resumeAfterGithub(){
   requestAnimationFrame(()=>(pending&&tone==='ok'?$('#githubButton'):$('#githubInput')).focus());
 }
 
+let localFoldersEnabled=false;
+$$('.local-only').forEach(element=>{element.hidden=true;});
 async function checkBackend(){
   const indicator=$('.live-dot');
   try{
     const response=await apiFetch(apiUrl('/api/health'));
     if(!response.ok)throw new Error(`HTTP ${response.status}`);
+    const health=await response.json();
     indicator.classList.add('connected');indicator.title='Indexer connected';indicator.setAttribute('aria-label','Indexer connected');
+    // Local folder uploads only exist when the server was started with SHOW_LOCAL=true.
+    localFoldersEnabled=health.localFolders===true;$$('.local-only').forEach(element=>{element.hidden=!localFoldersEnabled;});
   }catch{
     indicator.classList.remove('connected');indicator.title='Indexer unavailable';indicator.setAttribute('aria-label','Indexer unavailable');
   }
@@ -1360,6 +1366,18 @@ dialog.addEventListener('click',event=>{if(event.target===dialog)dialog.close();
 $$('.tab').forEach((tab,index)=>{tab.id=`tab-${tab.dataset.tab}`;tab.setAttribute('aria-controls',`panel-${tab.dataset.tab}`);$(`#panel-${tab.dataset.tab}`).setAttribute('aria-labelledby',tab.id);tab.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const tabs=$$('.tab'),next=event.key==='Home'?0:event.key==='End'?tabs.length-1:(index+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;switchTab(tabs[next].dataset.tab);tabs[next].focus();});});
 switchTab('inspector');
 new ResizeObserver(()=>{dirty=true;}).observe(viewport);
-$('#settingsButton').title='Workspace settings';$('#settingsButton').setAttribute('aria-label','Workspace settings');
-$('#settingsButton svg').innerHTML='<circle cx="12" cy="12" r="3"/><path d="m9.5 3-.5 2-2 1-2-.5L3 9l1.5 1.5v3L3 15l2 3.5 2-.5 2 1 .5 2h5l.5-2 2-1 2 .5 2-3.5-1.5-1.5v-3L21 9l-2-3.5-2 .5-2-1-.5-2z"/>';
+// Sidebar folds away with the tab on its left edge (or [ ); remembered on this device.
+function setInspectorHidden(hidden){
+  $('.workspace').classList.toggle('inspector-hidden',hidden);
+  const toggle=$('#inspectorToggle');toggle.setAttribute('aria-expanded',String(!hidden));toggle.title=hidden?'Show the sidebar ([)':'Hide the sidebar ([)';
+  try{localStorage.setItem('codenav.inspectorHidden',hidden?'1':'');}catch{}
+  dirty=true;
+}
+$('#inspectorToggle').addEventListener('click',event=>{event.currentTarget.blur();setInspectorHidden(!$('.workspace').classList.contains('inspector-hidden'));});
+document.addEventListener('keydown',event=>{if(event.key==='['&&!event.metaKey&&!event.ctrlKey&&!/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName)&&!document.querySelector('dialog[open]')){event.preventDefault();$('#inspectorToggle').click();}});
+try{if(localStorage.getItem('codenav.inspectorHidden'))setInspectorHidden(true);}catch{}
+// Canvas text (signs, posters, labels) needs the web fonts loaded before it rasterises them.
+Promise.all(['400 30px "Archivo Black"','400 13px "Atkinson Hyperlegible"','700 13px "Atkinson Hyperlegible"','700 11px "Space Mono"'].map(font=>document.fonts.load(font))).then(()=>{
+  labelAtlas.clear();if(cityModel)pastePosters();signState.key='';resetCodeCaches();dirty=true;
+}).catch(()=>{});
 renderer.setData([]);fitScene();renderInspector();renderHistory();requestAnimationFrame(animate);checkBackend();loadGithubStatus().then(()=>/[?&](github|setup_action)=/.test(location.search)?resumeAfterGithub():openPlaceFromHash());

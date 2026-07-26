@@ -160,7 +160,8 @@ kbd { display: inline-block; min-width: 18px; padding: 0 4px; border: 2px solid 
 .severity-high { color: var(--black); background: var(--tang); }
 .severity-medium { color: var(--black); background: var(--yellow); }
 .severity-low { color: var(--black); background: var(--muted); }
-.coverage-title, .coverage-list-head, .source-title { display: flex; align-items: baseline; justify-content: space-between; }
+.coverage-title, .coverage-list-head, .source-title { display: flex; align-items: center; justify-content: flex-start; }
+.coverage-title small, .coverage-list-head small, .source-title small { margin-left: auto; }
 .coverage-title small, .coverage-list-head small, .source-title small { color: var(--dim); font: 10px var(--mono); text-transform: none; letter-spacing: 0; }
 .coverage-menu { display: grid; gap: 3px; }
 .coverage-row { width: 100%; min-height: 34px; display: grid; grid-template-columns: 10px 1fr auto 14px; gap: 10px; align-items: center; padding: 5px 9px; border: 2px solid transparent; border-radius: 7px; background: transparent; color: var(--paper); text-align: left; cursor: pointer; }

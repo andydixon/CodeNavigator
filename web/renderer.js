@@ -107,6 +107,9 @@ void main(){
     outColor = vec4(vColor.rgb * pow(1.0 - vUnit.z, 1.6) * .55, 0.0);
     return;
   }
+  // The floor is painted without depth testing, so only its top faces may draw (sides and bottoms would
+  // paint over them).
+  if((vKind.x == 1 || vKind.x == 2) && vFace != 0) discard;
   if(vKind.x == 2){ outColor = vec4(fog(vec3(.035, .032, .028)), uAlpha); return; } // asphalt
   if(vKind.x == 4){
     // City wall: concrete courses and panel joints in metres, lit coping along the top.
@@ -437,7 +440,7 @@ export class LandscapeRenderer {
     this.codeTexture = gl.createTexture(); this.codeOn = false;
     this.anisotropy = gl.getExtension('EXT_texture_filter_anisotropic');
     this.cube = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, this.cube); gl.bufferData(gl.ARRAY_BUFFER, VERTICES, gl.STATIC_DRAW);
-    this.landscape = this.boxLayer(); this.cityLayer = this.boxLayer();
+    this.landscape = this.boxLayer(); this.cityLayer = this.boxLayer(); this.cityFloor = this.boxLayer();
     this.signProgram = program(gl, SIGN_VS, SIGN_FS); this.signUniforms = uniformsOf(gl, this.signProgram);
     this.corners = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, this.corners); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
     this.signLayer = this.quadLayer(); this.facadeLayer = this.quadLayer(); this.posterLayer = this.quadLayer(); this.posterTexture = this.texture();
@@ -637,11 +640,19 @@ export class LandscapeRenderer {
   }
 
   // City instances: [{x,y,w,h,height,color,atlas:[u,v,du,dv],kind,id}] in metres.
+  // The floor (ground and folder pavements, in nesting order) is its own layer: its surfaces are
+  // centimetres apart, far below depth-buffer precision from the air, so it is painted in order
+  // without depth testing instead of z-fighting (see render()).
   setCity(instances, bounds) {
-    const packed = new Float32Array(instances.length * FLOATS_PER_INSTANCE);
-    instances.forEach((b, i) => packed.set([b.x, b.y, b.w, b.h, ...b.color, b.height, ...(b.atlas || [0, 0, 0, 0]), b.kind, b.lit || 0, b.id || 0, 0], i * FLOATS_PER_INSTANCE));
+    const pack = list => {
+      const packed = new Float32Array(list.length * FLOATS_PER_INSTANCE);
+      list.forEach((b, i) => packed.set([b.x, b.y, b.w, b.h, ...b.color, b.height, ...(b.atlas || [0, 0, 0, 0]), b.kind, b.lit || 0, b.id || 0, 0], i * FLOATS_PER_INSTANCE));
+      return packed;
+    };
+    const floor = instances.filter(b => b.kind === KIND.ground || b.kind === KIND.block);
     this.cityInstances = instances; this.cityBounds = bounds;
-    this.upload(this.cityLayer, packed);
+    this.upload(this.cityFloor, pack(floor));
+    this.upload(this.cityLayer, pack(instances.filter(b => b.kind !== KIND.ground && b.kind !== KIND.block)));
   }
 
   // Highlights one landscape tile and one city building by file id (0 clears).
@@ -740,7 +751,13 @@ export class LandscapeRenderer {
     gl.uniform1f(u.uAlpha, alpha);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.codeTexture); gl.uniform1i(u.uCode, 0);
     gl.uniform1f(u.uCodeOn, this.codeOn && this.mode !== '2d' ? 1 : 0);
-    if (city) { gl.uniform1f(u.uFogDensity, fog); gl.uniform3f(u.uFogColor, ...fogColor); }
+    if (city) {
+      gl.uniform1f(u.uFogDensity, fog); gl.uniform3f(u.uFogColor, ...fogColor);
+      // Floor first, painter's order, no depth: later (deeper) folders simply cover their parents.
+      gl.disable(gl.DEPTH_TEST); gl.bindVertexArray(this.cityFloor.vao);
+      gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, this.cityFloor.count);
+      gl.enable(gl.DEPTH_TEST); gl.bindVertexArray(layer.vao);
+    }
     gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, layer.count);
     if (this.mode === 'city') {
       // Light effects add colour and never occlude: additive blending without depth writes.

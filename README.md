@@ -1,74 +1,79 @@
 # CodeNavigator
 
-A single binary that serves the WebGL frontend and the
-indexing API (jobs, SSE progress, snapshots, search, source) on one origin.
-No dependencies beyond the Go standard library.
+**See your code as a city.** CodeNavigator indexes a GitHub repository (or, if you allow it, a local
+folder) and turns it into a place you can explore: a zoomable map, a 3D landscape, and a walkable
+night-time city where every file is a building and every folder is a street.
+
+![CodeNavigator city view](docs/images/city.png)
+
+It's a single Go binary with no dependencies beyond the standard library. It serves both the
+indexing API and the browser frontend (plain ES modules and WebGL2, no build step).
+
+## What you can do
+
+| | |
+|---|---|
+| ![2D map](docs/images/map-2d.png) | **2D map**: a squarified treemap of every file, sized by lines or references, with source code rendered right on the tiles as you zoom in. |
+| ![3D landscape](docs/images/landscape-3d.png) | **3D landscape**: the same map extruded, orbit, pan and dolly around it. |
+| ![Routes in the city](docs/images/city-routes.png) | **City**: folders become districts and blocks, files become buildings (footprint from lines, height from complexity, lit windows from definitions). Select a file to see its imports as cyan routes and its dependents as pulsing magenta routes along the streets. |
+| ![Walking the city](docs/images/city-walk.png) | **Walk and fly** at street level with signs on every wall, folder street signs on the corners, source code on the facade in front of you, wandering residents and a city wall covered in posters. |
+
+Also:
+
+- **Search** every file and symbol, with results raised as light beacons in the city.
+- **Private GitHub repos** via a GitHub App sign-in, scoped to the visitor's own access.
+- **Security alerts**: with the right GitHub permissions, files with open code scanning or
+  Dependabot alerts smoke, burn (critical/high) and get wrapped in hazard tape.
+- **Multi-user**: every browser gets its own private sessions, snapshots and sign-in.
+- **Guided tour** of the biggest districts, and **shareable links** to an exact spot.
+- **Touch controls**: joystick, look and pinch.
+
+## Quick start
 
 ```bash
-go run .                 # http://127.0.0.1:4177
-go test -race ./...
-node --test webtest/*.test.mjs   # frontend maths: camera, city layout, collision, signs, links
-go test -run x -bench Index   # indexes $CODENAV_BENCH_DIR (default: Go's stdlib source)
-./build.sh [tag]         # Docker image, tests run during the build
+go run .                                  # http://127.0.0.1:4177
+```
+
+Open the page, click **Open a codebase**, and paste a public GitHub URL such as
+`https://github.com/prometheus/prometheus`. `git` must be on your `PATH` for cloning.
+
+With Docker:
+
+```bash
+./build.sh                                # builds codenavigator:latest, running the tests inside
 docker run --rm -p 4177:4177 codenavigator:latest
 ```
 
-Configuration:
+## Configuration
 
-- `PORT` (default `4177`, or `--port`), `CORS_ORIGIN` (default `*`)
-- `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`: a GitHub App's credentials; enables sign-in for private repositories
-- `GITHUB_APP_SLUG`: the app's URL name, for the "grant repository access" link
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | `4177` | Listening port (`--port` overrides) |
+| `CORS_ORIGIN` | `*` | `Access-Control-Allow-Origin` for the API |
+| `SHOW_LOCAL` | unset | `true` enables uploading local folders; otherwise only GitHub repositories |
+| `GITHUB_CLIENT_ID` | unset | GitHub App client ID; enables sign-in for private repos and security alerts |
+| `GITHUB_CLIENT_SECRET` | unset | GitHub App client secret |
+| `GITHUB_APP_SLUG` | unset | The app's URL name, for the "grant repository access" link |
 
-`git` must be on `PATH` to load GitHub repositories (the image includes it).
+## Keyboard
 
-## Views
+| Key | Where | Action |
+|---|---|---|
+| `Ctrl`+`O` | anywhere | Open a codebase |
+| `/` | anywhere | Search |
+| `F` | map views | Fit everything in view |
+| `[` | anywhere | Hide or show the sidebar |
+| `1` `2` `3` | city | Helicopter, walk, fly |
+| `W` `A` `S` `D`, `Shift` | walk/fly | Move, run |
+| `Space` / `C` | fly | Up / down |
+| `E` | walk/fly | Inspect the building in the crosshair |
+| `T` | city | Guided tour |
 
-- **2D map**: squarified treemap of files, sized by lines or references.
-- **3D landscape**: the same map extruded, orbit with drag, pan with Shift+drag, scroll to dolly.
-- **City**: folders become districts and blocks separated by roads, files become buildings
-  (footprint from lines, height from complexity, lit windows from definitions).
-  - `1` Helicopter, `2` Walk, `3` Fly. In walk/fly: click for mouse-look, WASD, Shift to run,
-    Space/C up and down when flying, `E` inspects the building in the crosshair.
-  - Double-click a street to drop in; the minimap shows your heading and teleports on click.
-  - Selecting a file draws import trails (cyan known, amber inferred); search hits raise beacons.
-  - `T` or **Tour** flies over the largest districts. **Copy link** shares the repository, view,
-    camera and selected file as a URL fragment (GitHub repositories only).
-  - Touch: left thumb joystick, right thumb look, pinch to zoom.
-  - Selecting a file also lays glowing routes along the streets: cyan/amber chevrons out to each
-    file it imports, and pulsing magenta dashes in from each file that imports it, in separate lanes.
-  - Residents wander the streets (toggle in Settings). A wall with posters encloses the city.
-  - Signed in with GitHub, files with open code scanning or Dependabot alerts smoke (and burn
-    for critical/high) and are wrapped in hazard tape. The GitHub App needs read access to
-    code scanning alerts and Dependabot alerts.
+## Documentation
 
-Frontend modules (plain ES modules, no build step): `camera.js` (matrices and orbit pose),
-`city.js` (layout, collision, picking, sign placement, tour and links), `labels.js` (text atlas),
-`renderer.js` (WebGL2 passes) and `app.js` (UI and input).
-
-## Multiple users
-
-Every browser gets an HttpOnly session cookie. Jobs, snapshots and GitHub sign-ins belong to
-that session and are invisible (404) to others. Each session keeps its latest snapshot; snapshots
-idle for an hour are deleted, at most 8 are held (least recently used evicted), and two indexes
-run at once while the rest queue. State is in memory, so a restart signs everyone out.
-
-## Private GitHub repositories
-
-Uses a GitHub App's user authorisation. When an anonymous clone fails, the frontend offers
-**Sign in with GitHub**; the callback (`/api/github/callback`) stores an 8-hour user token in
-memory for the session. Clones send it as an HTTP header via environment git config, never in
-the URL or arguments, and host git config and credential helpers are ignored. A signed-in user
-can only open repositories where the app is installed and they have access, otherwise the
-frontend links to the app's installation page.
-
-GitHub App settings: callback URL `https://<host>/api/github/callback`, setup URL `https://<host>/`
-with "Redirect on update", token expiry on, no webhook, repository permission Contents: read-only.
-
-The browser frontend in `web/` is plain JavaScript (it has to run in the browser) and
-is embedded into the binary; `web/config.js` points it at the same origin.
-
-Notes:
-- `GET /` serves the frontend instead of a JSON service description.
-- Jobs and snapshots are private to the browser session that created them (see above).
-- Search queries are percent-decoded properly.
-- `.gitignore` support covers standard globs but not global excludes or `.git/info/exclude`.
+- [City guide](docs/CITY.md): what everything in the city means and how to get around
+- [Architecture](docs/ARCHITECTURE.md): indexer, server, sessions, rendering pipeline
+- [HTTP API](docs/API.md): every endpoint, with request and response shapes
+- [GitHub App setup](docs/GITHUB_APP.md): private repos and security alerts
+- [Deployment](docs/DEPLOYMENT.md): Docker, systemd, nginx, operating limits
+- [Development](docs/DEVELOPMENT.md): running, testing, benchmarking, project layout

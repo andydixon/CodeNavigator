@@ -331,20 +331,59 @@ $('#shareButton').addEventListener('click',async event=>{
   window.history.replaceState(null,'',hash);
   try{await navigator.clipboard.writeText(location.href);flash('Link copied');}catch{flash('Link in address bar');}
 });
+// ---- Opening shared links: #repo=…&view=…&cam=…&file=… ----
+const repoName=url=>url.replace(/^https:\/\/github\.com\//,'');
+function pendingPlace(){try{return JSON.parse(sessionStorage.getItem('codenav.pendingPlace')||'null');}catch{return null;}}
+function clearPendingPlace(){try{sessionStorage.removeItem('codenav.pendingPlace');}catch{}}
+const sameRepo=(a,b)=>!!a&&!!b&&a.replace(/\/+$/,'').replace(/\.git$/,'').toLowerCase()===b.replace(/\/+$/,'').replace(/\.git$/,'').toLowerCase();
 function openPlaceFromHash(){
   const place=decodePlace(location.hash);if(!place)return;
+  // Already open in this tab: just go there.
+  if(sameRepo(place.repo,currentRepoUrl)&&files.length){goToPlace(place);return;}
   try{sessionStorage.setItem('codenav.pendingPlace',JSON.stringify(place));}catch{}
-  $('#githubInput').value=place.repo;startGithub();
+  if(dialog.open)dialog.close();
+  $('#githubInput').value=place.repo;
+  const where=place.file?place.file.split('/').pop():'the shared spot';
+  pullGithub(place.repo,'Opening a shared link',`${repoName(place.repo)} isn't loaded here yet, so it's being pulled from GitHub. You'll be taken to ${where} as soon as it's built.`);
 }
+window.addEventListener('hashchange',openPlaceFromHash);
+
 function applyPendingPlace(){
-  let place=null;try{place=JSON.parse(sessionStorage.getItem('codenav.pendingPlace')||'null');}catch{}
-  if(!place||place.repo!==currentRepoUrl)return;
-  try{sessionStorage.removeItem('codenav.pendingPlace');}catch{}
+  const place=pendingPlace();
+  if(!place||!sameRepo(place.repo,currentRepoUrl))return;
+  clearPendingPlace();
+  goToPlace(place);
+}
+
+// Switch view, select the file and fly the camera to the linked position.
+function goToPlace(place){
   $(`[data-view="${place.view}"]`)?.click();
   const file=place.file&&files.find(candidate=>candidate.path===place.file);
-  if(file){selectFile(file);if(!place.camera)focusFile(file);}
-  if(place.camera&&place.view==='city'){cancelCameraAnimation();Object.assign(renderer.city,place.camera);updateCityHud();}
-  dirty=true;
+  if(file)selectFile(file);
+  const target=place.view==='city'&&place.camera;
+  if(!target){if(file)focusFile(file);dirty=true;return;}
+  const c=renderer.city,{view,...pose}=target;
+  cancelCameraAnimation();endTour();
+  if(view!=='heli'){
+    // Start ground views from where the helicopter is looking, so the flight has somewhere to come from.
+    const {eye,forward}=renderer.cityPose();
+    Object.assign(c,{ex:eye[0],ey:eye[1],ez:eye[2],lookYaw:Math.atan2(-forward[0],-forward[1]),lookPitch:Math.asin(Math.max(-1,Math.min(1,forward[2])))});
+  }
+  c.view=view;updateCityHud();
+  animateCameraTo(pose,c,1800);
+}
+
+// A shared link to a repository this visitor can't clone: most likely private, with GitHub access
+// that has expired or was never granted on this device. The pending place is kept, so signing in
+// carries straight on to the shared spot.
+function showPrivateLinkWarning(place,authRequired){
+  showError('',authRequired);
+  $('#progressTitle').textContent='Private repository';
+  $('#progressMessage').textContent=authRequired==='install'
+    ?`This link points to ${repoName(place.repo)}, a private repository your GitHub account can't open here. Grant access to it, then open the link again.`
+    :`This link points to ${repoName(place.repo)}, a private repository, and your GitHub access has expired (or you haven't signed in on this device). Sign in with GitHub to carry on to the shared spot.`;
+  $('#progressFill').style.background='var(--yellow)';
+  $('#progressCount').textContent='';
 }
 
 // Crosshair target, street address and minimap, refreshed with each city frame.
@@ -1259,7 +1298,11 @@ async function uploadLocal(name,chosen){
 }
 
 $('#githubButton').addEventListener('click',startGithub);$('#githubInput').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();startGithub();}});
-async function startGithub(){const url=$('#githubInput').value.trim();$('#githubError').textContent='';$('#githubNotice').hidden=true;if(!/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?(?:\.git)?$/.test(url)){ $('#githubError').textContent='Enter a GitHub owner/repository URL.';return;}lastGithubUrl=url;dialog.close();showProgress('Cloning repository','Connecting to GitHub…',0,0);try{const response=await apiFetch(apiUrl('/api/jobs'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'github',url,name:url.split('/').filter(Boolean).pop()?.replace(/\.git$/,'')})});const payload=await response.json();if(!response.ok)throw new Error(payload.error||'Could not start indexing');watchJob(payload.jobId);}catch(error){showError(error.message);}}
+async function startGithub(){const url=$('#githubInput').value.trim();$('#githubError').textContent='';$('#githubNotice').hidden=true;if(!/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?(?:\.git)?$/.test(url)){ $('#githubError').textContent='Enter a GitHub owner/repository URL.';return;}if(!sameRepo(pendingPlace()?.repo,url))clearPendingPlace();dialog.close();pullGithub(url,'Cloning repository','Connecting to GitHub…');}
+async function pullGithub(url,title,message){
+  lastGithubUrl=url;showProgress(title,message,0,0);
+  try{const response=await apiFetch(apiUrl('/api/jobs'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'github',url,name:url.split('/').filter(Boolean).pop()?.replace(/\.git$/,'')})});const payload=await response.json();if(!response.ok)throw new Error(payload.error||'Could not start indexing');watchJob(payload.jobId);}catch(error){showError(error.message);}
+}
 
 let activeJobStream=null;
 async function watchJob(jobId){
@@ -1269,8 +1312,9 @@ async function watchJob(jobId){
     const response=await apiFetch(apiUrl(`/api/jobs/${jobId}/events`),{signal:controller.signal});
     for await(const job of progressEvents(response)){
       if(controller.signal.aborted)return;
-      showProgress(job.phase==='ready'?'Landscape ready':'Indexing codebase',job.message,job.completed,job.total);
-      if(job.error){showError(job.error,job.authRequired);return;}
+      const place=pendingPlace();
+      showProgress(job.phase==='ready'?'Landscape ready':place?'Opening a shared link':'Indexing codebase',place&&!job.total?`Pulling ${repoName(place.repo)} from GitHub. You'll be taken to ${place.file?place.file.split('/').pop():'the shared spot'} once it's built.`:job.message,job.completed,job.total);
+      if(job.error){if(place&&job.authRequired)showPrivateLinkWarning(place,job.authRequired);else{clearPendingPlace();showError(job.error,job.authRequired);}return;}
       if(job.snapshotId){
         const scene=await apiFetch(apiUrl(`/api/snapshots/${job.snapshotId}/scene`),{signal:controller.signal});
         if(!scene.ok)throw new Error('Could not load the landscape.');
@@ -1318,6 +1362,12 @@ async function resumeAfterGithub(){
     error:['error','GitHub sign-in failed. Give it another go.'],
   };
   const [tone,message]=notices[outcome]||notices.error;
+  const place=pendingPlace();
+  if(place&&tone==='ok'){
+    try{sessionStorage.removeItem('codenav.pendingRepo');}catch{}
+    pullGithub(place.repo,'Opening a shared link',`${message} Pulling ${repoName(place.repo)} and taking you to the shared spot…`);
+    return;
+  }
   const notice=$('#githubNotice');notice.hidden=false;notice.dataset.tone=tone;notice.textContent=message;
   if(pending)$('#githubInput').value=pending;
   if(!dialog.open)dialog.showModal();

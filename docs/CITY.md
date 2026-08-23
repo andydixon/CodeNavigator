@@ -56,8 +56,18 @@ to everything it imports and from everything that imports it. With a file select
 - **Tour (`T`)**: flies over the six largest districts with captions, and stops as soon as you
   touch anything.
 - **Copy link**: copies a URL with the repository, view, camera position and selected file.
-  Opening it loads the repository and puts you in the same spot. Links work for GitHub
-  repositories only.
+  Links work for GitHub repositories only.
+
+Opening a shared link:
+
+- **Repository already open in this tab:** you fly straight to the spot, and the file is selected.
+- **Repository not loaded here:** a card says it's being pulled from GitHub and indexed. Once it's
+  built, you're flown to the saved camera position and the file is selected.
+- **Private repository you can't access** (not signed in on this device, or your GitHub access has
+  expired): you get a warning with a **Sign in with GitHub** button. After signing in, the link
+  carries on by itself to the shared spot.
+- **Private repository the GitHub App can't see:** the warning offers **Grant repository access**
+  instead.
 
 ## Settings
 

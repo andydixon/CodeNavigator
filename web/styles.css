@@ -44,7 +44,7 @@ kbd { display: inline-block; min-width: 18px; padding: 0 4px; border: 2px solid 
 
 @keyframes wiggle { 25% { transform: rotate(-9deg); } 75% { transform: rotate(7deg); } }
 @keyframes blink { 50% { opacity: .35; } }
-@keyframes barber { to { background-position: 28px 0; } }
+@keyframes barber { from { transform: translateX(-28px); } to { transform: translateX(0); } }
 @keyframes plonk { from { opacity: 0; transform: translateY(-10px) rotate(-3deg); } }
 @keyframes bob { 50% { transform: rotate(4deg) translateY(-4px); } }
 
@@ -268,7 +268,13 @@ kbd { display: inline-block; min-width: 18px; padding: 0 4px; border: 2px solid 
 .progress-copy span, .progress-count { color: var(--muted); }
 #progressMessage { max-height: 100px; overflow: auto; overflow-wrap: anywhere; font: 11px var(--mono); }
 .progress-track { position: relative; height: 12px; margin: 12px 0 7px; overflow: hidden; border: 2px solid var(--black); border-radius: 3px; background: var(--ink); }
-.progress-track i { display: block; height: 100%; width: 5%; background: repeating-linear-gradient(-45deg, var(--lime) 0 7px, var(--black) 7px 14px) 0 0 / 28px 100%; animation: barber .6s linear infinite; transition: width .25s ease; }
+.progress-track i { position: relative; display: block; height: 100%; width: 5%; overflow: hidden; background: var(--lime); transition: width .25s ease; }
+/* Barber pole: 45deg stripes whose horizontal period is exactly 28px (stripe spacing 28/sqrt 2), painted
+   once on a layer 28px wider than the bar and slid one period, so the loop has no seam or jump. */
+.progress-track i::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: calc(100% + 28px); background: repeating-linear-gradient(-45deg, var(--lime) 0 calc(14px / 1.41421356), var(--black) 0 calc(28px / 1.41421356)); animation: barber .6s linear infinite; will-change: transform; }
+.progress-track i[data-tone="error"] { background: var(--danger); }
+.progress-track i[data-tone="warn"] { background: var(--yellow); }
+.progress-track i[data-tone]::before { display: none; }
 .progress-count { font: 10.5px var(--mono); }
 .progress-dismiss { position: absolute; right: 8px; top: 8px; }
 .progress-action { display: inline-grid; place-items: center; width: fit-content; margin-top: 14px; text-decoration: none; }

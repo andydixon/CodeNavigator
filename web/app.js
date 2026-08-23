@@ -382,7 +382,7 @@ function showPrivateLinkWarning(place,authRequired){
   $('#progressMessage').textContent=authRequired==='install'
     ?`This link points to ${repoName(place.repo)}, a private repository your GitHub account can't open here. Grant access to it, then open the link again.`
     :`This link points to ${repoName(place.repo)}, a private repository, and your GitHub access has expired (or you haven't signed in on this device). Sign in with GitHub to carry on to the shared spot.`;
-  $('#progressFill').style.background='var(--yellow)';
+  $('#progressFill').dataset.tone='warn';
   $('#progressCount').textContent='';
 }
 
@@ -1326,8 +1326,8 @@ async function watchJob(jobId){
   }catch(error){if(!controller.signal.aborted)showError(error.message);}
   finally{if(activeJobStream===controller)activeJobStream=null;controller.abort();}
 }
-function showProgress(title,message,completed,total){$('#progressCard').hidden=false;$('#progressAction').hidden=true;$('#progressTitle').textContent=title;$('#progressMessage').textContent=message||'';const percent=total?Math.max(3,Math.round(completed/total*100)):12;$('#progressFill').style.width=`${percent}%`;$('#progressFill').style.background='';$('#progressCount').textContent=total?`${format(completed)} / ${format(total)} · ${percent}%`:'Working…';}
-function showError(message,authRequired){$('#progressCard').hidden=false;showAuthAction(authRequired);$('#progressTitle').textContent='Could not build landscape';$('#progressMessage').textContent=message;$('#progressFill').style.width='100%';$('#progressFill').style.background='var(--danger)';$('#progressCount').textContent='Check the repository or folder and try again.';}
+function showProgress(title,message,completed,total){$('#progressCard').hidden=false;$('#progressAction').hidden=true;$('#progressTitle').textContent=title;$('#progressMessage').textContent=message||'';const percent=total?Math.max(3,Math.round(completed/total*100)):12;$('#progressFill').style.width=`${percent}%`;delete $('#progressFill').dataset.tone;$('#progressCount').textContent=total?`${format(completed)} / ${format(total)} · ${percent}%`:'Working…';}
+function showError(message,authRequired){$('#progressCard').hidden=false;showAuthAction(authRequired);$('#progressTitle').textContent='Could not build landscape';$('#progressMessage').textContent=message;$('#progressFill').style.width='100%';$('#progressFill').dataset.tone='error';$('#progressCount').textContent='Check the repository or folder and try again.';}
 
 // Private repositories: sign in (or grant the GitHub App access), then resume the same repository on return.
 let lastGithubUrl='',githubStatus={};

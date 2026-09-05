@@ -364,6 +364,7 @@ in float vDepth;
 flat in float vSeed;
 uniform float uTime;
 uniform float uFogDensity;
+uniform float uSelectedSeed;
 out vec4 outColor;
 float segment(vec2 p, vec2 a, vec2 b){ vec2 pa = p - a, ba = b - a; return length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0)); }
 void main(){
@@ -381,6 +382,11 @@ void main(){
   float flicker = .85 + .15 * sin(uTime * 7.0 + vSeed * 40.0);
   vec3 green = vec3(.32, 1.0, .38) * flicker;
   float fog = exp(-pow(vDepth * uFogDensity, 2.0));
+  if(abs(vSeed - uSelectedSeed) < 1e-7){
+    // The selected resident glows pink with a wider halo.
+    green = vec3(1.0, .37, .66);
+    halo = exp(-max(d, 0.0) * 7.0) * .6;
+  }
   if(body + halo < .01) discard;
   outColor = vec4(green * (body + halo) * fog, 0.0);
 }`;
@@ -599,6 +605,12 @@ export class LandscapeRenderer {
     this.upload(this.beaconLayer, packed);
   }
 
+  // Residents are drawn larger from the air so crowds stay visible; picking uses the same scale.
+  residentScale() {
+    const c = this.city;
+    return c.view === 'heli' ? Math.min(6, Math.max(1, c.distance / 250)) : c.view === 'fly' ? Math.min(4, Math.max(1, c.ez / 120)) : 1;
+  }
+
   get animating() { return this.mode === 'city' && (this.trailLayer.count > 0 || this.routeLayer.count > 0 || this.wandererLayer.count > 0 || this.smokeLayer.count > 0); }
 
   syncAtlas() {
@@ -777,7 +789,7 @@ export class LandscapeRenderer {
         gl.useProgram(this.wandererProgram); gl.bindVertexArray(this.wandererLayer.vao);
         gl.uniformMatrix4fv(w.uViewProj, false, this.viewProj); gl.uniform2f(w.uRight, -f[1] / len, f[0] / len);
         // From the air they'd be sub-pixel; grow them so crowds read as drifting green specks.
-        gl.uniform1f(w.uScale, c.view === 'heli' ? Math.min(6, Math.max(1, c.distance / 250)) : c.view === 'fly' ? Math.min(4, Math.max(1, c.ez / 120)) : 1);
+        gl.uniform1f(w.uScale, this.residentScale()); gl.uniform1f(w.uSelectedSeed, this.selectedResidentSeed ?? -1);
         gl.uniform1f(w.uTime, performance.now() / 1000); gl.uniform1f(w.uFogDensity, fog);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.wandererLayer.count);
       }

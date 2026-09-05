@@ -58,6 +58,7 @@ Plain ES modules, no framework, no build step.
 | `camera.js` | Matrix maths: perspective, lookAt, inverse, orbit pose |
 | `city.js` | Pure city logic, unit tested: layout, collision, navigation grid and routing, sign placement, tape, walls, posters, residents, place links |
 | `labels.js` | Text atlas for signs (shelf-packed canvas) and the poster atlas |
+| `people.js` | Residents' identities, generated deterministically from the repository name and resident index, plus the ID card portrait |
 | `api.mjs` | `fetch` wrapper and SSE-over-fetch parser |
 
 ### Views

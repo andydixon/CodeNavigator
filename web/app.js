@@ -1,6 +1,7 @@
 import { LandscapeRenderer, KIND } from './renderer.js';
 import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, flatQuad, wallSigns, folderBlades, folderLabel, facadeQuad, heading, tourStops, encodePlace, decodePlace, joystick, buildNavGrid, routesFrom, spawnWanderers, stepWanderers, alertsByPath, burns, tapeQuads, cityWalls, posterQuads, seededRandom, WALL, ROUTE_KIND, enterBuilding, MOVE } from './city.js';
 import { LabelAtlas, PosterAtlas } from './labels.js';
+import { personFor, residentSeed, drawPortrait } from './people.js';
 import { apiFetch, progressEvents } from './api.mjs';
 
 const configuredBackend=window.CODENAVIGATOR_CONFIG?.backendUrl?.trim()||'';
@@ -232,6 +233,8 @@ document.addEventListener('mousemove',event=>{if(document.pointerLockElement===g
 document.addEventListener('pointerlockchange',()=>{if(!document.pointerLockElement)heldKeys.clear();updateCityHud();});
 
 function inspectCityTarget(openPanel){
+  const resident=pickResident(renderer.width/2,renderer.height/2);
+  if(resident){selectResident(resident);if(openPanel&&document.pointerLockElement)document.exitPointerLock();return;}
   if(!cityTargetEntry)return;
   selectFile(cityTargetEntry.file);
   if(openPanel){switchTab('inspector');if(document.pointerLockElement)document.exitPointerLock();}
@@ -635,6 +638,7 @@ function mountSourceViewer(file){
 }
 
 function selectFile(file,addHistory=true){
+  deselectResident();
   selected=file||null;
   if(!file)coverageActiveIndex=-1;
   if(file&&addHistory){history=history.filter(item=>item.id!==file.id);history.unshift(file);history=history.slice(0,30);renderHistory();}
@@ -645,6 +649,11 @@ function selectFile(file,addHistory=true){
 function renderInspector(){
   const hint=$('#inspectHint'),content=$('#inspectContent');
   if(!files.length){hint.hidden=false;hint.textContent='Open a codebase to get going.';content.innerHTML='';return;}
+  if(selectedResident){
+    hint.hidden=true;content.innerHTML=residentCard(selectedResident);
+    drawPortrait($('#residentPortrait').getContext('2d'),personOf(selectedResident),240,290);
+    return;
+  }
   if(!selected){
     hint.hidden=false;hint.textContent=expandedCoverageLayer?'Click a file or use ↑ and ↓ to move around the map':'Click anything on the map. Go on.';
     const coverageRows=Object.entries(layerLabels).map(([key,label])=>`<button class="coverage-row${expandedCoverageLayer===key?' active':''}" type="button" data-coverage-layer="${key}" aria-expanded="${expandedCoverageLayer===key}"><i style="background:${palettes[paletteIndex][key]}"></i><span>${label}</span><small>${format(sceneStats.layers.get(key)||0)}</small><b aria-hidden="true">${expandedCoverageLayer===key?'−':'+'}</b></button>`).join('');
@@ -758,7 +767,7 @@ function drawOverlay(){
   resizeOverlay();const ctx=overlayCtx,w=overlay.clientWidth,h=overlay.clientHeight;ctx.clearRect(0,0,w,h);ctx.save();ctx.font='600 11px "Space Mono", ui-monospace, monospace';ctx.textBaseline='top';
   codeTexturesPending=false;
   codeTextureDeadline=performance.now()+5;
-  if(renderer.mode==='city'){visibleScreenItems=[];drawCityOverlay();ctx.restore();return;}
+  if(renderer.mode==='city'){visibleScreenItems=[];drawCityOverlay();drawResidentTag(ctx);ctx.restore();return;}
   const hitIds=new Set(searchHits.map(hit=>hit.entityId??hit.id)),occupied=[],visible=visibleLayout(w,h);visibleScreenItems=visible;
   let labelCount=0;
   if(showCode&&renderer.mode==='2d'){
@@ -791,6 +800,12 @@ function drawOverlay(){
   ctx.restore();
 }
 
+function drawResidentTag(ctx){
+  const w=selectedResident;if(!w)return;
+  const head=renderer.project([w.x,w.y,1.55*renderer.residentScale()]);
+  if(!Number.isFinite(head.x)||head.x<0||head.y<0||head.x>renderer.width||head.y>renderer.height)return;
+  drawChip(ctx,personOf(w).name,head.x,head.y-24,200,'#ff5ea8',null,true,'center');
+}
 function drawCityOverlay(){
   if(cityModel){updateCityReadouts();updateCitySigns();if(showCode)updateFacade();else renderer.setFacade(null);}
   // The facade gets this frame's text budget before the background roof atlas.
@@ -869,7 +884,71 @@ function pastePosters(){
 // Residents: roughly one per 2,500 m² of city, capped so large repos stay cheap to simulate.
 function spawnResidents(){
   wanderers=showResidents&&navGrid?spawnWanderers(navGrid,Math.max(40,Math.min(600,Math.round(cityModel.width*cityModel.height/2500))),Math.random,cityModel):[];
+  // Each resident's identity comes from the repository and their index, so resident #17 of a city is
+  // always the same person. The shader matches the selection against the float32 seed it receives.
+  wanderers.forEach((w,index)=>{w.index=index;w.seed=Math.fround(residentSeed(currentName,index)/4294967296);});
+  if(selectedResident)deselectResident();
   if(!wanderers.length)renderer.setWanderers(new Float32Array(0));
+}
+
+// ---- Selecting a resident: they stop to pose, get a name tag, and the sidebar shows their ID card ----
+let selectedResident=null;
+const personCache=new Map();
+function personOf(w){
+  const key=`${currentName}#${w.index}`;
+  if(!personCache.has(key))personCache.set(key,personFor(residentSeed(currentName,w.index)));
+  return personCache.get(key);
+}
+function selectResident(w){
+  selectFile(null,false);
+  selectedResident=w;w.resumePause=w.pause;w.pause=Infinity;
+  renderer.selectedResidentSeed=w.seed;
+  $('#breadcrumbText').textContent=`${currentName}  ›  resident  ›  ${personOf(w).name}`;
+  switchTab('inspector');renderInspector();dirty=true;
+}
+function deselectResident(){
+  if(!selectedResident)return;
+  selectedResident.pause=Math.min(1,selectedResident.resumePause||0)||.5;
+  selectedResident=null;renderer.selectedResidentSeed=-1;dirty=true;
+}
+// The resident nearest a screen point whose figure is under it and not hidden behind a building.
+function pickResident(x,y){
+  if(renderer.mode!=='city'||!wanderers.length)return null;
+  const scale=renderer.residentScale(),{origin,dir}=renderer.ray(x,y),wall=pickRay(origin,dir,cityEntries)?.distance??Infinity;
+  let best=null,bestScore=Infinity;
+  for(const w of wanderers){
+    const foot=renderer.project([w.x,w.y,0]),head=renderer.project([w.x,w.y,1.3*scale]);
+    if(!Number.isFinite(foot.x)||!Number.isFinite(head.x))continue;
+    const height=Math.max(8,foot.y-head.y),radius=Math.max(10,height*.45),cx=(foot.x+head.x)/2,cy=(foot.y+head.y)/2;
+    const dx=(x-cx)/radius,dy=(y-cy)/(height*.6+4),score=dx*dx+dy*dy;
+    if(score>1||score>=bestScore)continue;
+    if(Math.hypot(w.x-origin[0],w.y-origin[1],.65*scale-origin[2])>wall+1)continue;
+    best=w;bestScore=score;
+  }
+  return best;
+}
+function residentCard(w){
+  const person=personOf(w),block=blockAt(cityModel.blocks,w.x,w.y);
+  const district=block?block.node.path:currentName;
+  const bars=[...person.id].map((char,i)=>`<i style="width:${1+(char.charCodeAt(0)*7+i)%4}px"></i>`).join('');
+  return `<div class="id-card" aria-label="Resident ID card">
+    <div class="id-card-head"><span>City of ${escapeHtml(currentName)}</span><b>RESIDENT ID</b></div>
+    <div class="id-card-body">
+      <canvas class="id-card-portrait" id="residentPortrait" width="240" height="290" aria-label="Portrait of ${escapeHtml(person.name)}"></canvas>
+      <div class="id-card-fields">
+        <small>Name</small><strong>${escapeHtml(person.name)}</strong>
+        <div class="id-card-grid">
+          <span><small>Sex</small>${person.sex}</span><span><small>Age</small>${person.age}</span>
+          <span><small>Blood</small>${person.bloodType}</span><span><small>Eyes</small>${person.eyeColour}</span>
+          <span class="wide"><small>Hair</small>${person.hairColour}</span>
+        </div>
+      </div>
+    </div>
+    <div class="id-card-job"><small>Occupation</small><strong>${escapeHtml(person.occupation)}</strong><span>at ${escapeHtml(person.employer)}</span></div>
+    <div class="id-card-foot"><span><small>Last seen</small>${escapeHtml(district)}</span><span class="id-card-number">${person.id}</span></div>
+    <div class="id-card-barcode" aria-hidden="true">${bars}${bars}</div>
+  </div>
+  <p class="panel-hint id-card-note">Not a real person. Probably.</p>`;
 }
 let residentBuffer=new Float32Array(0);
 function updateResidents(seconds){
@@ -1208,7 +1287,7 @@ function finishPointer(event){
   if(event.pointerType==='touch')endTouch(event);
   if(!pointer.down||event.pointerId!==pointer.id)return;
   viewport.classList.remove('dragging','panning','orbiting');
-  if(event.type==='pointerup'&&event.button===0&&Math.hypot(event.clientX-pointer.startX,event.clientY-pointer.startY)<4){const rect=viewport.getBoundingClientRect();selectFile(pickAt(event.clientX-rect.left,event.clientY-rect.top));}
+  if(event.type==='pointerup'&&event.button===0&&Math.hypot(event.clientX-pointer.startX,event.clientY-pointer.startY)<4){const rect=viewport.getBoundingClientRect(),x=event.clientX-rect.left,y=event.clientY-rect.top,resident=pickResident(x,y);if(resident)selectResident(resident);else selectFile(pickAt(x,y));}
   pointer.down=false;pointer.id=null;
 }
 viewport.addEventListener('pointerup',finishPointer);

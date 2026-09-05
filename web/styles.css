@@ -160,6 +160,28 @@ kbd { display: inline-block; min-width: 18px; padding: 0 4px; border: 2px solid 
 .severity-high { color: var(--black); background: var(--tang); }
 .severity-medium { color: var(--black); background: var(--yellow); }
 .severity-low { color: var(--black); background: var(--muted); }
+/* Resident ID card: laminated cream card, lime header, holographic sheen, barcode. */
+.id-card { position: relative; overflow: hidden; margin: 4px 2px 0; border: 2px solid var(--black); border-radius: 12px; background: #f3ecdc; color: #15130f; box-shadow: 5px 5px 0 var(--black); transform: rotate(-1.2deg); animation: plonk .25s ease-out; }
+.id-card::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(115deg, transparent 30%, rgba(92,200,255,.18) 42%, rgba(255,94,168,.18) 50%, rgba(200,241,53,.18) 58%, transparent 70%); }
+.id-card small { display: block; color: #6b6352; font: 700 8.5px var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+.id-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 7px 12px; border-bottom: 2px solid var(--black); background: var(--lime); }
+.id-card-head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 700 10px var(--mono); text-transform: uppercase; }
+.id-card-head b { flex-shrink: 0; font: 400 13px var(--display); }
+.id-card-body { display: grid; grid-template-columns: 96px minmax(0,1fr); gap: 12px; padding: 12px; }
+.id-card-portrait { width: 96px; height: 116px; border: 2px solid var(--black); border-radius: 6px; box-shadow: 2px 2px 0 var(--black); }
+.id-card-fields strong { display: block; margin: 1px 0 8px; font: 400 17px/1.1 var(--display); overflow-wrap: anywhere; }
+.id-card-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+.id-card-grid span { font: 700 12px var(--mono); }
+.id-card-grid .wide { grid-column: 1 / -1; }
+.id-card-job { margin: 0 12px; padding: 8px 10px; border: 2px dashed #b9ae95; border-radius: 6px; }
+.id-card-job strong { display: block; font: 700 14px var(--body); }
+.id-card-job span { color: #4a4436; font-size: 12px; }
+.id-card-foot { display: flex; align-items: end; justify-content: space-between; gap: 10px; padding: 10px 12px 4px; font: 700 11px var(--mono); }
+.id-card-foot > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.id-card-number { flex-shrink: 0; padding: 1px 6px; border-radius: 3px; background: #15130f; color: var(--lime); }
+.id-card-barcode { display: flex; gap: 2px; height: 26px; margin: 6px 12px 12px; overflow: hidden; }
+.id-card-barcode i { flex-shrink: 0; height: 100%; background: #15130f; }
+.id-card-note { margin-top: 14px; font: italic 11px var(--mono); text-align: center; }
 .coverage-title, .coverage-list-head, .source-title { display: flex; align-items: center; justify-content: flex-start; }
 .coverage-title small, .coverage-list-head small, .source-title small { margin-left: auto; }
 .coverage-title small, .coverage-list-head small, .source-title small { color: var(--dim); font: 10px var(--mono); text-transform: none; letter-spacing: 0; }

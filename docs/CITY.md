@@ -24,7 +24,7 @@ scale, so a large repository is a large city.
 | **Cyan chevrons** on the road | Route to a file the selected file imports (**amber** if the import was inferred) |
 | **Pulsing magenta dashes** on the road | Route from a file that imports the selected file |
 | **Arcs** in the sky | The same import relationships, as the crow flies |
-| **Green figures** | Residents. They don't mean anything; they just live there |
+| **Green figures** | Residents. Click one (or aim the crosshair and press `E`) and they stop, glow pink with their name overhead, and the sidebar shows their resident ID card: name, sex, age, occupation, employer, eye and hair colour, blood type. The same resident is always the same person. |
 | **Wall with posters** | The city limits, with a few facts about the codebase pasted on |
 
 ## Getting around

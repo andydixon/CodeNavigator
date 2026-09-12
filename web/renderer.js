@@ -17,7 +17,7 @@ const VERTICES = new Float32Array([
 ]);
 
 // Instance kinds in the box program.
-export const KIND = { building: 0, block: 1, ground: 2, beacon: 3, wall: 4 };
+export const KIND = { building: 0, block: 1, ground: 2, beacon: 3, wall: 4, door: 5, prop: 6, lamp: 7, pool: 8 };
 const FLOATS_PER_INSTANCE = 16;
 
 // Landscape heights are exaggerated relative to the 1000x680 map so small repositories still read as 3D.
@@ -61,7 +61,9 @@ flat out vec2 vLit;
 void main(){
   int kind = int(aMeta.x + .5);
   float height = kind == 0 && uMode < 1.5 ? max(1.0, aColorHeight.a) : aColorHeight.a;
-  vec3 world = vec3(aRect.xy + aUnit.xy * aRect.zw, aUnit.z * height);
+  // Doors and street furniture carry their base height in the otherwise unused lit slot.
+  float base = kind >= 5 ? aMeta.y : 0.0;
+  vec3 world = vec3(aRect.xy + aUnit.xy * aRect.zw, base + aUnit.z * height);
   vColor = vec4(aColorHeight.rgb, 1.0);
   vUnit = aUnit;
   vAtlas = aAtlas.xy + aUnit.xy * aAtlas.zw;
@@ -75,9 +77,12 @@ void main(){
 
 // Two variants from one source: the landscape build compiles none of the city's fog, window
 // and beacon code, which otherwise tripled fragment cost in software renderers.
-const fragmentShader = city => `#version 300 es
+// props: doors and street furniture get their own tiny variant, so every building pixel doesn't pay
+// for their branches.
+const fragmentShader = (city, props = false) => `#version 300 es
 precision highp float;
 ${city ? '#define CITY 1' : ''}
+${props ? '#define PROPS 1' : ''}
 in vec4 vColor;
 in vec3 vUnit;
 in vec2 vAtlas;
@@ -100,6 +105,35 @@ vec3 fog(vec3 color){ return mix(color, uFogColor, 1.0 - exp(-pow(vDepth * uFogD
 vec3 fog(vec3 color){ return color; }
 #endif
 void main(){
+#ifdef PROPS
+  if(vKind.x == 8){
+    // Pool of lamp light on the pavement, drawn additively: a soft warm disc.
+    if(vFace != 0) discard;
+    float r = length(vUnit.xy * 2.0 - 1.0);
+    outColor = vec4(vColor.rgb * pow(max(0.0, 1.0 - r), 2.0) * .28 * (1.0 - smoothstep(.5, 1.0, 1.0 - exp(-pow(vDepth * uFogDensity, 2.0)))), 0.0);
+    return;
+  }
+  if(vKind.x == 7){ outColor = vec4(fog(vColor.rgb * 1.6), uAlpha); return; } // lamp head
+  if(vKind.x == 6){
+    // Street furniture: flat colour with the same per-side light as buildings.
+    float light = vFace == 0 ? 1.0 : vFace == 1 ? .8 : vFace == 2 ? .55 : vFace == 3 ? .65 : vFace == 4 ? .9 : .4;
+    outColor = vec4(fog(vColor.rgb * light), uAlpha);
+    return;
+  }
+  if(vKind.x == 5){
+    // Door: a dark recessed doorway with a warm lit frame, a glowing transom and a handle.
+    vec2 f = vFace == 0 || vFace == 5 ? vUnit.xy : vFace < 3 ? vUnit.xz : vUnit.yz;
+    float frame = 1.0 - step(.09, f.x) * step(f.x, .91) * step(f.y, .93);
+    float transom = step(.8, f.y) * step(f.y, .9) * step(.15, f.x) * step(f.x, .85);
+    float handle = step(.72, f.x) * step(f.x, .78) * step(.42, f.y) * step(f.y, .5);
+    vec3 warm = vec3(1.0, .76, .42);
+    vec3 c = mix(vec3(.05, .04, .035), warm * 1.3, max(frame, handle * .8));
+    c = mix(c, warm * .9, transom);
+    outColor = vec4(fog(vFace == 0 ? warm * .6 : c), uAlpha);
+    return;
+  }
+  discard;
+#endif
 #ifdef CITY
   if(vKind.x == 3){
     // Search beacon: a light column fading upward, open at the top.
@@ -435,6 +469,7 @@ export class LandscapeRenderer {
     this.gl = gl;
     this.program = program(gl, VS, fragmentShader(false)); this.uniforms = uniformsOf(gl, this.program);
     this.cityProgram = program(gl, VS, fragmentShader(true)); this.cityUniforms = uniformsOf(gl, this.cityProgram);
+    this.propProgram = program(gl, VS, fragmentShader(true, true)); this.propUniforms = uniformsOf(gl, this.propProgram);
     this.gridProgram = program(gl, GRID_VS, GRID_FS); this.gridUniforms = uniformsOf(gl, this.gridProgram);
     const grid = [];
     for (let x = -200; x <= 1200; x += 100) grid.push(x, -200, x, 900);
@@ -446,7 +481,7 @@ export class LandscapeRenderer {
     this.codeTexture = gl.createTexture(); this.codeOn = false;
     this.anisotropy = gl.getExtension('EXT_texture_filter_anisotropic');
     this.cube = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, this.cube); gl.bufferData(gl.ARRAY_BUFFER, VERTICES, gl.STATIC_DRAW);
-    this.landscape = this.boxLayer(); this.cityLayer = this.boxLayer(); this.cityFloor = this.boxLayer();
+    this.landscape = this.boxLayer(); this.cityLayer = this.boxLayer(); this.cityFloor = this.boxLayer(); this.glowLayer = this.boxLayer(); this.propLayer = this.boxLayer();
     this.signProgram = program(gl, SIGN_VS, SIGN_FS); this.signUniforms = uniformsOf(gl, this.signProgram);
     this.corners = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, this.corners); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
     this.signLayer = this.quadLayer(); this.facadeLayer = this.quadLayer(); this.posterLayer = this.quadLayer(); this.posterTexture = this.texture();
@@ -655,16 +690,25 @@ export class LandscapeRenderer {
   // The floor (ground and folder pavements, in nesting order) is its own layer: its surfaces are
   // centimetres apart, far below depth-buffer precision from the air, so it is painted in order
   // without depth testing instead of z-fighting (see render()).
+  static packBoxes(list) {
+    const packed = new Float32Array(list.length * FLOATS_PER_INSTANCE);
+    list.forEach((b, i) => packed.set([b.x, b.y, b.w, b.h, ...b.color, b.height, ...(b.atlas || [0, 0, 0, 0]), b.kind, b.lit || 0, b.id || 0, 0], i * FLOATS_PER_INSTANCE));
+    return packed;
+  }
+
+  // Street furniture near the camera (props and lamp heads) plus their pools of light.
+  setProps(boxes) {
+    const pack = LandscapeRenderer.packBoxes;
+    this.upload(this.propLayer, pack(boxes.filter(b => b.kind !== KIND.pool)));
+    this.upload(this.glowLayer, pack(boxes.filter(b => b.kind === KIND.pool)));
+  }
+
   setCity(instances, bounds) {
-    const pack = list => {
-      const packed = new Float32Array(list.length * FLOATS_PER_INSTANCE);
-      list.forEach((b, i) => packed.set([b.x, b.y, b.w, b.h, ...b.color, b.height, ...(b.atlas || [0, 0, 0, 0]), b.kind, b.lit || 0, b.id || 0, 0], i * FLOATS_PER_INSTANCE));
-      return packed;
-    };
+    const pack = LandscapeRenderer.packBoxes;
     const floor = instances.filter(b => b.kind === KIND.ground || b.kind === KIND.block);
     this.cityInstances = instances; this.cityBounds = bounds;
     this.upload(this.cityFloor, pack(floor));
-    this.upload(this.cityLayer, pack(instances.filter(b => b.kind !== KIND.ground && b.kind !== KIND.block)));
+    this.upload(this.cityLayer, pack(instances.filter(b => b.kind !== KIND.ground && b.kind !== KIND.block && b.kind !== KIND.pool)));
   }
 
   // Highlights one landscape tile and one city building by file id (0 clears).
@@ -771,9 +815,16 @@ export class LandscapeRenderer {
       gl.enable(gl.DEPTH_TEST); gl.bindVertexArray(layer.vao);
     }
     gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, layer.count);
+    const useProps = () => {
+      const p = this.propUniforms;
+      gl.useProgram(this.propProgram); this.setCameraUniforms(p); gl.uniform1f(p.uAlpha, alpha);
+      gl.uniform1f(p.uFogDensity, fog); gl.uniform3f(p.uFogColor, ...fogColor);
+    };
+    if (city && this.propLayer.count) { useProps(); gl.bindVertexArray(this.propLayer.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, this.propLayer.count); gl.useProgram(this.cityProgram); }
     if (this.mode === 'city') {
       // Light effects add colour and never occlude: additive blending without depth writes.
       gl.depthMask(false); gl.blendFunc(gl.ONE, gl.ONE);
+      if (this.glowLayer.count) { useProps(); gl.bindVertexArray(this.glowLayer.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, this.glowLayer.count); gl.useProgram(this.cityProgram); }
       if (this.beaconLayer.count) { gl.bindVertexArray(this.beaconLayer.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, this.beaconLayer.count); }
       if (this.smokeLayer.count) {
         // Camera-facing particles: the view matrix rows are the camera's right and up axes.

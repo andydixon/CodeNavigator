@@ -38,7 +38,7 @@ export const CITY = {
   minLines: 40, // small files still get a walkable kiosk
   roadWidths: [18, 12, 8, 6], // avenues between districts, then narrower streets per folder depth
   sidewalk: 2.5, // kerb inside each block before buildings start
-  setback: 1.2, // gap between neighbouring buildings
+  setback: 2.4, // alley between neighbouring buildings, wide enough for a path to a back door
   cellSize: 32, // spatial grid cell for collision and picking
 };
 
@@ -86,7 +86,7 @@ export function layoutCity(files, name = '') {
     squarifiedLayout(entries, x + kerb, y + kerb, w - kerb * 2, h - kerb * 2, depth, (entry, rx, ry, rw, rh) => {
       const value = entry.value;
       if (!value.file) return visit(value, rx, ry, rw, rh, depth + 1);
-      const gap = Math.min(CITY.setback / 2, rw * .12, rh * .12);
+      const gap = Math.min(CITY.setback / 2, rw * .22, rh * .22);
       buildings.set(value.file.id, { x: rx + gap, y: ry + gap, w: rw - gap * 2, h: rh - gap * 2, height: buildingHeight(value.file) });
     });
   };
@@ -384,13 +384,13 @@ export function folderLabel(path, root, max = 34) {
 export function buildNavGrid(buildings, blocks, bounds, cell = 3, margin = .5) {
   const pad = 40, ox = -pad, oy = -pad;
   const cols = Math.ceil((bounds.width + pad * 2) / cell), rows = Math.ceil((bounds.height + pad * 2) / cell);
-  const blocked = new Uint8Array(cols * rows), cost = new Float32Array(cols * rows).fill(1);
+  const blocked = new Uint8Array(cols * rows), cost = blocks.length ? new Float32Array(cols * rows).fill(1) : null;
   const cellsOf = (x0, y0, x1, y1, fn) => {
     const c0 = Math.max(0, Math.floor((x0 - ox) / cell)), c1 = Math.min(cols - 1, Math.floor((x1 - ox) / cell));
     const r0 = Math.max(0, Math.floor((y0 - oy) / cell)), r1 = Math.min(rows - 1, Math.floor((y1 - oy) / cell));
     for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) fn(r * cols + c);
   };
-  for (const block of blocks) if (block.depth > 0) cellsOf(block.x, block.y, block.x + block.w - 1e-6, block.y + block.h - 1e-6, i => { cost[i] = 1.35; });
+  if (cost) for (const block of blocks) if (block.depth > 0) cellsOf(block.x, block.y, block.x + block.w - 1e-6, block.y + block.h - 1e-6, i => { cost[i] = 1.35; });
   for (const b of buildings) cellsOf(b.x - margin, b.y - margin, b.x + b.w + margin - 1e-6, b.y + b.h + margin - 1e-6, i => { blocked[i] = 1; });
   return { cell, cols, rows, ox, oy, blocked, cost };
 }
@@ -440,9 +440,10 @@ class MinHeap {
   }
 }
 
-// Straight line between two points stays on walkable cells (sampled at half-cell steps).
+// Straight line between two points stays on walkable cells (sampled at quarter-cell steps, so a
+// shortcut can't clip a blocked cell's corner by more than a fraction of the margin).
 export function clearLine(grid, a, b) {
-  const steps = Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / (grid.cell * .5));
+  const steps = Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / (grid.cell * .25));
   for (let s = 1; s < steps; s++) if (!walkable(grid, a[0] + (b[0] - a[0]) * s / steps, a[1] + (b[1] - a[1]) * s / steps)) return false;
   return true;
 }
@@ -468,9 +469,11 @@ export function routesFrom(grid, source, targets) {
   const { cols, rows, blocked, cost } = grid, n = cols * rows;
   // Float64: float32 distances round up, so equal paths look like improvements and flood the queue.
   const distance = new Float64Array(n).fill(Infinity), parent = new Int32Array(n).fill(-1), heap = new MinHeap();
-  for (const door of doors(grid, source)) { distance[door] = 0; heap.push(door, 0); }
+  // Buildings with a door start and finish on its doorstep; others use any cell beside them.
+  const entrances = b => { const step = b.door && cellAt(grid, ...b.door.step); return step >= 0 && step !== undefined && !blocked[step] ? [step] : doors(grid, b); };
+  for (const door of entrances(source)) { distance[door] = 0; heap.push(door, 0); }
   const settled = new Uint8Array(n);
-  const goals = targets.map(t => new Set(doors(grid, t)));
+  const goals = targets.map(t => new Set(entrances(t)));
   const reached = targets.map(() => -1);
   let remaining = targets.length;
   const neighbours = [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, Math.SQRT2], [1, -1, Math.SQRT2], [-1, 1, Math.SQRT2], [-1, -1, Math.SQRT2]];
@@ -487,12 +490,13 @@ export function routesFrom(grid, source, targets) {
       const j = nr * cols + nc;
       // No corner cutting: a diagonal needs both orthogonal neighbours free.
       if (blocked[j] || (dc && dr && (blocked[r * cols + nc] || blocked[nr * cols + c]))) continue;
-      const next = d + step * (cost[i] + cost[j]) / 2;
+      const next = d + step * (cost ? (cost[i] + cost[j]) / 2 : 1);
       if (next < distance[j]) { distance[j] = next; parent[j] = i; heap.push(j, next); }
     }
   }
   // Buildings boxed in by their neighbours have no door on a street: end at the reachable
   // street cell nearest the building instead.
+  const found = reached.map(end => end >= 0);
   for (let t = 0; t < targets.length; t++) {
     if (reached[t] >= 0) continue;
     const b = targets[t], cx = b.x + b.w / 2, cy = b.y + b.h / 2;
@@ -503,11 +507,13 @@ export function routesFrom(grid, source, targets) {
       if (d < best) { best = d; reached[t] = i; }
     }
   }
-  return reached.map(end => {
+  return reached.map((end, t) => {
     if (end < 0) return null;
     const cells = [];
     for (let i = end; i >= 0; i = parent[i]) cells.push(cellCenter(grid, i));
-    return simplifyRoute(grid, cells.reverse());
+    const route = simplifyRoute(grid, cells.reverse());
+    route.reached = found[t]; // false when it stopped at the nearest street instead of the target
+    return route;
   });
 }
 
@@ -649,7 +655,8 @@ export function ribbonVertices(routes, width = 1.3, z = .45, lane = .8) {
   const vertices = [];
   for (const route of routes) {
     // Drop repeated points so every segment has a direction.
-    const points = route.points.filter((p, i, all) => i === 0 || Math.hypot(p[0] - all[i - 1][0], p[1] - all[i - 1][1]) > 1e-3);
+    const keep = route.points.map((p, i, all) => i === 0 || Math.hypot(p[0] - all[i - 1][0], p[1] - all[i - 1][1]) > 1e-3);
+    const points = route.points.filter((_, i) => keep[i]), narrow = (route.narrow || []).filter((_, i) => keep[i]);
     if (points.length < 2) continue;
     // Right-of-travel normal per segment: (-dy, dx) in this left-handed world (see heading()).
     const normals = [];
@@ -667,8 +674,9 @@ export function ribbonVertices(routes, width = 1.3, z = .45, lane = .8) {
     let along = 0;
     const edge = points.map((p, i) => {
       if (i) along += Math.hypot(p[0] - points[i - 1][0], p[1] - points[i - 1][1]);
-      const m = mitre(i);
-      return { left: [p[0] + m[0] * (lane - width / 2), p[1] + m[1] * (lane - width / 2)], right: [p[0] + m[0] * (lane + width / 2), p[1] + m[1] * (lane + width / 2)], along };
+      // Alley points are single-file: narrower and centred instead of in a lane.
+      const m = mitre(i), w = narrow[i] ? .5 : width, offset = narrow[i] ? 0 : lane;
+      return { left: [p[0] + m[0] * (offset - w / 2), p[1] + m[1] * (offset - w / 2)], right: [p[0] + m[0] * (offset + w / 2), p[1] + m[1] * (offset + w / 2)], along };
     });
     for (let i = 1; i < edge.length; i++) {
       const a = edge[i - 1], b = edge[i];
@@ -687,4 +695,238 @@ export function enterBuilding(point, b, depth = .8) {
   const dx = nx - point[0], dy = ny - point[1], length = Math.hypot(dx, dy);
   if (length < 1e-6) return [nx, ny];
   return [nx + dx / length * depth, ny + dy / length * depth];
+}
+
+// ---- Doors ----
+
+export const DOOR = { width: 2.8, height: 3, cornerClearance: 1.2 };
+
+// Gives each building one door, centred on a wall where possible and never within
+// DOOR.cornerClearance of a corner. Buildings on a street get their door facing it; buildings
+// in the middle of a folder get a back door with a path along the alleys (on `fine`, a
+// half-metre grid) out to the nearest street.
+// door: { at: [x, y] on the wall, n: outward normal, width, path: [at, ..., step] out to the
+// street (step is walkable on `grid`), inside: a point in the building, access: 'street' | 'alley' }.
+export function assignDoors(buildings, grid, fine = null) {
+  let distance = null; // built on first need
+  for (const b of buildings) {
+    const candidates = [];
+    for (const wall of walls(b)) {
+      const corner = Math.min(DOOR.cornerClearance, wall.width * .2), width = Math.min(DOOR.width, wall.width - corner * 2);
+      if (width < 1) continue;
+      const along = [wall.n[1], -wall.n[0]], slack = (wall.width - width) / 2 - corner;
+      for (const t of [0, -.4, .4, -.8, .8]) {
+        const offset = t * slack;
+        candidates.push({ wall, width, t, at: [wall.c[0] + along[0] * offset, wall.c[1] + along[1] * offset] });
+      }
+    }
+    const door = (c, path, access) => ({ at: c.at, n: c.wall.n, width: c.width, path, step: path.at(-1), inside: [c.at[0] - c.wall.n[0] * 1.5, c.at[1] - c.wall.n[1] * 1.5], access });
+    // Straight out onto a street.
+    let best = null;
+    for (const c of candidates) {
+      for (let d = .5; d <= grid.cell * 2; d += .5) {
+        const p = [c.at[0] + c.wall.n[0] * d, c.at[1] + c.wall.n[1] * d];
+        if (!walkable(grid, p[0], p[1])) continue;
+        const score = d + Math.abs(c.t) * 4; // prefer a short step, then the middle of the wall
+        if (!best || score < best.score) best = { score, c, path: [c.at, p] };
+        break;
+      }
+    }
+    if (best) { b.door = door(best.c, best.path, 'street'); continue; }
+    const alley = fine && alleyToStreet(candidates, grid, fine, distance ||= streetDistance(grid, fine));
+    b.door = alley ? door(alley.c, alley.path, 'alley') : null;
+  }
+  return buildings;
+}
+
+// Distance (in half-steps: 2 orthogonal, 3 diagonal) from every open cell of the fine grid to the
+// nearest point that is walkable on the street grid, by repeated two-pass chamfer sweeps until
+// nothing changes, so it follows winding alleys. Computed once per city.
+function streetDistance(grid, fine) {
+  const { cols, rows, blocked } = fine, n = cols * rows, UNKNOWN = 65534, WALL = 65535;
+  const dist = new Uint16Array(n);
+  for (let r = 0, i = 0; r < rows; r++) {
+    const gr = Math.floor((fine.oy + (r + .5) * fine.cell - grid.oy) / grid.cell);
+    for (let c = 0; c < cols; c++, i++) {
+      if (blocked[i]) { dist[i] = WALL; continue; }
+      const gc = Math.floor((fine.ox + (c + .5) * fine.cell - grid.ox) / grid.cell);
+      dist[i] = gc >= 0 && gr >= 0 && gc < grid.cols && gr < grid.rows && !grid.blocked[gr * grid.cols + gc] ? 0 : UNKNOWN;
+    }
+  }
+  const relax = (i, j, cost) => { if (dist[j] < WALL && dist[j] + cost < dist[i]) { dist[i] = dist[j] + cost; return true; } return false; };
+  for (let pass = 0, changed = true; changed && pass < 40; pass++) {
+    changed = false;
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      const i = r * cols + c; if (dist[i] >= WALL || dist[i] === 0) continue;
+      if (c > 0) changed = relax(i, i - 1, 2) || changed;
+      if (r > 0) { changed = relax(i, i - cols, 2) || changed; if (c > 0 && !blocked[i - 1] && !blocked[i - cols]) changed = relax(i, i - cols - 1, 3) || changed; if (c < cols - 1 && !blocked[i + 1] && !blocked[i - cols]) changed = relax(i, i - cols + 1, 3) || changed; }
+    }
+    for (let r = rows - 1; r >= 0; r--) for (let c = cols - 1; c >= 0; c--) {
+      const i = r * cols + c; if (dist[i] >= WALL || dist[i] === 0) continue;
+      if (c < cols - 1) changed = relax(i, i + 1, 2) || changed;
+      if (r < rows - 1) { changed = relax(i, i + cols, 2) || changed; if (c < cols - 1 && !blocked[i + 1] && !blocked[i + cols]) changed = relax(i, i + cols + 1, 3) || changed; if (c > 0 && !blocked[i - 1] && !blocked[i + cols]) changed = relax(i, i + cols - 1, 3) || changed; }
+    }
+  }
+  return dist;
+}
+
+// The best candidate door with an alley out to a street: each candidate steps straight out to the
+// first open fine cell, then follows the distance field downhill to the street.
+function alleyToStreet(candidates, grid, fine, dist) {
+  const { cols, rows, blocked } = fine;
+  let best = null;
+  for (const c of candidates) {
+    for (let d = .3; d <= 1.6; d += fine.cell / 2) {
+      const exit = [c.at[0] + c.wall.n[0] * d, c.at[1] + c.wall.n[1] * d], i = cellAt(fine, ...exit);
+      if (i < 0 || blocked[i]) continue;
+      if (dist[i] < 65534) {
+        const score = dist[i] * fine.cell / 2 + Math.abs(c.t) * 4;
+        if (!best || score < best.score) best = { score, c, exit, start: i };
+      }
+      break;
+    }
+  }
+  if (!best) return null;
+  const cells = [];
+  for (let i = best.start, guard = 0; guard < 100000; guard++) {
+    cells.push(cellCenter(fine, i));
+    if (dist[i] === 0) break;
+    const c = i % cols, r = (i - c) / cols;
+    let next = -1;
+    for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+      const nc = c + dc, nr = r + dr;
+      if (nc < 0 || nr < 0 || nc >= cols || nr >= rows) continue;
+      const j = nr * cols + nc;
+      if (blocked[j] || (dc && dr && (blocked[r * cols + nc] || blocked[nr * cols + c]))) continue;
+      if (next < 0 || dist[j] < dist[next]) next = j;
+    }
+    if (next < 0 || dist[next] >= dist[i]) return null; // shouldn't happen once the field has settled
+    i = next;
+  }
+  // Straight out through the doorway, then along the alley.
+  return { c: best.c, path: [best.c.at, best.exit, ...simplifyRoute(fine, cells)] };
+}
+
+// The whole route for a street path: from inside one building, out through its door (and along
+// its alley, if it has a back door) onto the street, along the street and in through the other
+// building's door. Returns { points, narrow } where narrow marks alley points, drawn thinner so
+// they fit between buildings. Falls back to the nearest wall when a building has no door or the
+// street never reached it.
+export function routeThroughDoors(street, from, to) {
+  const ends = (b, point, reached) => b.door && reached !== false
+    ? [b.door.inside, ...b.door.path].map(p => ({ p, narrow: b.door.access === 'alley' }))
+    : [{ p: enterBuilding(point, b), narrow: false }];
+  const all = [...ends(from, street[0]), ...street.map(p => ({ p, narrow: false })), ...ends(to, street.at(-1), street.reached).reverse()];
+  return { points: all.map(e => e.p), narrow: all.map(e => e.narrow) };
+}
+
+// ---- Street furniture ----
+
+// Everything sits on a folder's pavement just inside its boundary, never on the dark roads:
+// streetlights at every corner and every ~20 m along each edge, with bins, benches, trees,
+// hydrants and post boxes between them. Nothing goes near a building, a doorstep or a nested folder.
+export const FURNITURE = { lightSpacing: 20 };
+const FURNITURE_TYPES = [
+  { type: 'bin', weight: 30, inset: .9, clearance: .8 },
+  { type: 'bench', weight: 24, inset: 1.1, clearance: 1.2 },
+  { type: 'tree', weight: 28, inset: 1.6, clearance: 1.9 },
+  { type: 'hydrant', weight: 12, inset: .7, clearance: .6 },
+  { type: 'postbox', weight: 6, inset: .9, clearance: .8 },
+];
+
+export function streetFurniture(blocks, buildings, random = Math.random) {
+  const out = [], index = spatialIndex(buildings);
+  // Keep a clear approach to every door: nothing within 2.5 m of the straight path from the door
+  // out towards the road (12 m), which is where routes and people come and go.
+  const approaches = buildings.filter(b => b.door && b.door.access === 'street').map(({ door }) => ({ a: door.at, n: door.n }));
+  const alleyIndex = spatialIndex(buildings.filter(b => b.door && b.door.access === 'alley').flatMap(({ door }) => door.path).map(([x, y]) => ({ x, y, w: 0, h: 0 })), 16);
+  const approachIndex = spatialIndex(approaches.map(({ a, n }) => ({ x: Math.min(a[0], a[0] + n[0] * 12), y: Math.min(a[1], a[1] + n[1] * 12), w: Math.abs(n[0]) * 12, h: Math.abs(n[1]) * 12, a, n })), 16);
+  const onApproach = (x, y) => [...approachIndex.near(x, y, 3)].some(({ a, n }) => {
+    const along = (x - a[0]) * n[0] + (y - a[1]) * n[1], across = Math.abs((x - a[0]) * n[1] - (y - a[1]) * n[0]);
+    return along > -1 && along < 12 && across < 2.5;
+  });
+  const nested = blocks.filter(block => block.depth > 1);
+  const distanceToBuildings = (x, y, radius) => {
+    let nearest = Infinity;
+    for (const b of index.near(x, y, radius + 1)) nearest = Math.min(nearest, Math.hypot(Math.max(b.x - x, 0, x - b.x - b.w), Math.max(b.y - y, 0, y - b.y - b.h)));
+    return nearest;
+  };
+  const free = (block, x, y, clearance) =>
+    distanceToBuildings(x, y, clearance) >= clearance &&
+    !onApproach(x, y) && [...alleyIndex.near(x, y, 2.5)].every(p => Math.hypot(p.x - x, p.y - y) > 2.5) &&
+    !nested.some(o => o !== block && o.depth > block.depth && x > o.x - clearance && x < o.x + o.w + clearance && y > o.y - clearance && y < o.y + o.h + clearance);
+  const pick = () => {
+    let roll = random() * FURNITURE_TYPES.reduce((sum, t) => sum + t.weight, 0);
+    for (const t of FURNITURE_TYPES) if ((roll -= t.weight) < 0) return t;
+    return FURNITURE_TYPES[0];
+  };
+  for (const block of blocks) {
+    if (block.depth < 1 || block.w < 6 || block.h < 6) continue;
+    // Edges clockwise; `out` points away from the block, towards the road.
+    const edges = [
+      { a: [block.x, block.y], b: [block.x + block.w, block.y], out: [0, -1] },
+      { a: [block.x + block.w, block.y], b: [block.x + block.w, block.y + block.h], out: [1, 0] },
+      { a: [block.x + block.w, block.y + block.h], b: [block.x, block.y + block.h], out: [0, 1] },
+      { a: [block.x, block.y + block.h], b: [block.x, block.y], out: [-1, 0] },
+    ];
+    for (const edge of edges) {
+      const length = Math.hypot(edge.b[0] - edge.a[0], edge.b[1] - edge.a[1]), dir = [(edge.b[0] - edge.a[0]) / length, (edge.b[1] - edge.a[1]) / length];
+      const at = (distance, inset) => [edge.a[0] + dir[0] * distance - edge.out[0] * inset, edge.a[1] + dir[1] * distance - edge.out[1] * inset];
+      // Lights include the edge's starting corner (each corner starts exactly one edge).
+      const lights = Math.max(1, Math.round(length / FURNITURE.lightSpacing)), spacing = length / lights;
+      for (let i = 0; i < lights; i++) {
+        const distance = i === 0 ? .6 : i * spacing, [x, y] = at(distance, .5);
+        if (free(block, x, y, .5)) out.push({ type: 'light', x, y, out: edge.out, along: dir, block });
+        const between = distance + spacing / 2;
+        if (between > length - 1.5) continue;
+        const kind = pick(), [px, py] = at(between, kind.inset);
+        if (free(block, px, py, kind.clearance)) out.push({ type: kind.type, x: px, y: py, out: edge.out, along: dir, block });
+      }
+    }
+  }
+  return out;
+}
+
+// Boxes that draw a piece of furniture: { x, y, w, h, z, height, color, part } where part is
+// 'solid', 'lamp' (emissive) or 'pool' (a pool of light on the pavement).
+export function furnitureBoxes(item) {
+  const boxes = [], { x, y, out, along } = item;
+  const box = (ax, ay, sx, sy, z, height, color, part = 'solid') => {
+    // ax/ay are offsets along the edge and out towards the road; sx/sy sizes in those directions.
+    const cx = x + along[0] * ax + out[0] * ay, cy = y + along[1] * ax + out[1] * ay;
+    const w = Math.abs(along[0]) * sx + Math.abs(out[0]) * sy, h = Math.abs(along[1]) * sx + Math.abs(out[1]) * sy;
+    boxes.push({ x: cx - w / 2, y: cy - h / 2, w, h, z, height, color, part });
+  };
+  switch (item.type) {
+    case 'light':
+      box(0, 0, .18, .18, 0, 5.6, [.18, .18, .2]);
+      box(0, .55, .12, 1.2, 5.45, .12, [.18, .18, .2]);
+      box(0, 1.05, .45, .6, 5.2, .25, [1, .86, .55], 'lamp');
+      box(0, .6, 9, 9, .38, .02, [1, .78, .42], 'pool');
+      break;
+    case 'bin':
+      box(0, 0, .6, .6, 0, .95, [.12, .32, .2]);
+      box(0, 0, .7, .7, .95, .08, [.08, .2, .13]);
+      break;
+    case 'bench':
+      box(0, 0, 1.7, .45, 0, .42, [.2, .16, .12]);
+      box(0, 0, 1.8, .5, .42, .08, [.55, .36, .2]);
+      box(0, -.24, 1.8, .08, .5, .5, [.55, .36, .2]);
+      break;
+    case 'tree':
+      // Canopy starts above head height so walkers pass underneath.
+      box(0, 0, .32, .32, 0, 3.4, [.3, .2, .12]);
+      box(0, 0, 2.4, 2.4, 3, 1.5, [.16, .42, .2]);
+      box(0, 0, 1.6, 1.6, 4.5, 1, [.2, .5, .24]);
+      break;
+    case 'hydrant':
+      box(0, 0, .32, .32, 0, .6, [.85, .72, .1]);
+      box(0, 0, .42, .2, .38, .12, [.7, .58, .08]);
+      break;
+    case 'postbox':
+      box(0, 0, .55, .55, 0, 1.2, [.78, .08, .08]);
+      box(0, 0, .65, .65, 1.2, .14, [.6, .05, .05]);
+      break;
+  }
+  return boxes;
 }

@@ -1,5 +1,5 @@
 import { LandscapeRenderer, KIND } from './renderer.js';
-import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, flatQuad, wallSigns, folderBlades, folderLabel, facadeQuad, heading, tourStops, encodePlace, decodePlace, joystick, buildNavGrid, routesFrom, spawnWanderers, stepWanderers, alertsByPath, burns, tapeQuads, cityWalls, posterQuads, seededRandom, WALL, ROUTE_KIND, enterBuilding, MOVE } from './city.js';
+import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, flatQuad, wallSigns, folderBlades, folderLabel, facadeQuad, heading, tourStops, encodePlace, decodePlace, joystick, buildNavGrid, routesFrom, spawnWanderers, stepWanderers, alertsByPath, burns, tapeQuads, cityWalls, posterQuads, seededRandom, WALL, ROUTE_KIND, enterBuilding, assignDoors, routeThroughDoors, streetFurniture, furnitureBoxes, DOOR, MOVE } from './city.js';
 import { LabelAtlas, PosterAtlas } from './labels.js';
 import { personFor, residentSeed, drawPortrait } from './people.js';
 import { apiFetch, progressEvents } from './api.mjs';
@@ -47,6 +47,7 @@ let searchHits=[];
 let expandedCoverageLayer=null;
 let coverageActiveIndex=-1;
 let cameraAnimation=null;
+let cityFurniture=[],propState={key:''};
 let cityModel=null,cityEntries=[],cityIndex=null,collisionIndex=null,cityWallBoxes=[],cityFitted=false,cityDistricts=[],cityFolders=[],navGrid=null,cityRoutes=[],wanderers=[],showResidents=true;
 let currentSnapshot=null;
 let currentName='';
@@ -131,8 +132,26 @@ function computeCity(){
   cityIndex=spatialIndex(cityEntries);
   // The wall keeps walkers, residents and routes inside; it's in the collision index but not the pick index.
   cityWallBoxes=cityWalls(cityModel);
-  collisionIndex=spatialIndex([...cityEntries,...cityWallBoxes]);
-  navGrid=buildNavGrid([...cityEntries,...cityWallBoxes],cityModel.blocks,cityModel);
+  // Routes keep 2 m from walls, so a ribbon in its lane can never clip a building.
+  navGrid=buildNavGrid([...cityEntries,...cityWallBoxes],cityModel.blocks,cityModel,3,2);
+  // Back doors find their way out along the alleys on a half-metre grid.
+  assignDoors(cityEntries,navGrid,buildNavGrid([...cityEntries,...cityWallBoxes],[],cityModel,.5,.3));
+  const doorBoxes=[];
+  for(const b of cityEntries){
+    const d=b.door;if(!d)continue;
+    const depth=.18,along=[d.n[1],-d.n[0]],cx=d.at[0]+d.n[0]*depth/2,cy=d.at[1]+d.n[1]*depth/2;
+    const w=Math.abs(along[0])*d.width+Math.abs(d.n[0])*depth,h=Math.abs(along[1])*d.width+Math.abs(d.n[1])*depth;
+    doorBoxes.push({x:cx-w/2,y:cy-h/2,w,h,height:Math.min(DOOR.height,b.height-.5),color:[1,1,1],kind:KIND.door,lit:0});
+  }
+  // Street furniture on folder pavements, seeded by the repository so each city is furnished the same way.
+  let furnitureSeed=0;for(const char of currentName)furnitureSeed=(furnitureSeed*33+char.charCodeAt(0))|0;
+  const furniture=streetFurniture(cityModel.blocks,cityEntries,seededRandom(furnitureSeed));
+  const obstacles=[];
+  // Doors are culled with the furniture: from any distance where they'd matter they're tiny.
+  cityFurniture=[...doorBoxes.map(box=>({x:box.x+box.w/2,y:box.y+box.h/2,boxes:[box]})),...furniture.map(item=>({x:item.x,y:item.y,boxes:furnitureBoxes(item).map(part=>({...part,kind:part.part==='pool'?KIND.pool:part.part==='lamp'?KIND.lamp:KIND.prop,lit:part.z}))}))];
+  for(const item of cityFurniture)for(const part of item.boxes)if(part.kind===KIND.prop&&part.z<1)obstacles.push({x:part.x,y:part.y,w:part.w,h:part.h,height:part.height});
+  propState.key='';
+  collisionIndex=spatialIndex([...cityEntries,...cityWallBoxes,...obstacles]);
   updateFires();
   spawnResidents();
   // Each folder's own buildings (not its subfolders'), for street-corner signs.
@@ -177,7 +196,7 @@ function setCityView(view,at){
       if(fromHeli)Object.assign(c,{ex:eye[0],ey:eye[1],ez:eye[2],lookYaw:Math.atan2(-forward[0],-forward[1]),lookPitch:Math.asin(Math.max(-1,Math.min(1,forward[2])))});
       // With routes showing, walking starts at the selected building's door facing down the first route.
       // Every route starts (imports) or ends (dependents) at the selected building; walk out from its door.
-      const first=cityRoutes[0],route=!at&&view==='walk'&&first?.points.length>2?(first.outgoing?first.points:[...first.points].reverse()).slice(1):null; // skip the point inside the building
+      const first=cityRoutes[0],route=!at&&view==='walk'&&first?.points.length>3?(first.outgoing?first.points:[...first.points].reverse()).slice(2):null; // start on the doorstep
       const target=at||route?.[0]||[c.x,c.y],spot=collide(target[0],target[1],MOVE.radius*3,collisionIndex);
       const facing=route?Math.atan2(-(route[1][0]-route[0][0]),-(route[1][1]-route[0][1])):null;
       animateCameraTo({ex:spot.x,ey:spot.y,ez:view==='walk'?MOVE.eyeHeight:Math.min(Math.max(60,c.ez*.5),260),lookYaw:facing??(view==='walk'?openHeading(spot.x,spot.y,c.lookYaw):c.lookYaw),lookPitch:view==='walk'?(route?-.18:0):-.3},c,1100);
@@ -806,8 +825,20 @@ function drawResidentTag(ctx){
   if(!Number.isFinite(head.x)||head.x<0||head.y<0||head.x>renderer.width||head.y>renderer.height)return;
   drawChip(ctx,personOf(w).name,head.x,head.y-24,200,'#ff5ea8',null,true,'center');
 }
+// Street furniture is only uploaded near where you're looking: from high up it is sub-pixel, and
+// thousands of small boxes are costly to draw everywhere at once.
+function updateProps(){
+  const c=renderer.city,heli=c.view==='heli';
+  const radius=heli?(c.distance>600?0:Math.min(400,Math.max(150,c.distance*.9))):320;
+  const focus=heli?[c.x,c.y]:[c.ex,c.ey],key=radius?[Math.round(focus[0]/40),Math.round(focus[1]/40),Math.round(radius/100)].join():'none';
+  if(key===propState.key)return;
+  propState.key=key;
+  const boxes=[];
+  if(radius)for(const item of cityFurniture)if(Math.abs(item.x-focus[0])<radius&&Math.abs(item.y-focus[1])<radius)boxes.push(...item.boxes);
+  renderer.setProps(boxes);
+}
 function drawCityOverlay(){
-  if(cityModel){updateCityReadouts();updateCitySigns();if(showCode)updateFacade();else renderer.setFacade(null);}
+  if(cityModel){updateCityReadouts();updateCitySigns();updateProps();if(showCode)updateFacade();else renderer.setFacade(null);}
   // The facade gets this frame's text budget before the background roof atlas.
   if(showCode){fillCodeOverview();uploadCodeOverview();}
 }
@@ -846,9 +877,10 @@ function updateRoutes(){
     // Paths cost the same both ways, so one search from the selected building serves both directions.
     if(targets.length)routesFrom(navGrid,source,targets).forEach((street,i)=>{
       if(!street)return;
-      // Run from inside the selected building, along the streets, and into the other file's building.
-      const points=[enterBuilding(street[0],source),...street,enterBuilding(street.at(-1),targets[i])];
-      cityRoutes.push({points:meta[i].outgoing?points:points.reverse(),kind:meta[i].kind,outgoing:meta[i].outgoing,target:targets[i]});
+      // Out of the selected building's door, along the streets, and in through the other building's door.
+      const {points,narrow}=routeThroughDoors(street,source,targets[i]);
+      if(!meta[i].outgoing){points.reverse();narrow.reverse();}
+      cityRoutes.push({points,narrow,kind:meta[i].kind,outgoing:meta[i].outgoing,target:targets[i]});
     });
   }
   renderer.setRoutes(cityRoutes);dirty=true;

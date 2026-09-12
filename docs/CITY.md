@@ -21,6 +21,9 @@ scale, so a large repository is a large city.
 | **Yellow tape** rising across the walls | Dependabot alert (on the manifest file) |
 | **Red tape** falling across the walls | Code scanning alert |
 | **Light beam** into the sky | A search result |
+| **Lit doorway** | The building's door: facing the street, or a back door onto an alley for files in the middle of a folder |
+| **Streetlights** with pools of light | The edges of each folder: lights stand on its boundary, at every corner and every 20 m or so |
+| **Bins, benches, trees, hydrants, post boxes** | Street furniture on the folder's pavement. Purely for atmosphere |
 | **Cyan chevrons** on the road | Route to a file the selected file imports (**amber** if the import was inferred) |
 | **Pulsing magenta dashes** on the road | Route from a file that imports the selected file |
 | **Arcs** in the sky | The same import relationships, as the crow flies |
@@ -48,7 +51,9 @@ the selected file's routes.
 ## Following dependencies
 
 Select a file (click it, search for it, or pick it from the sidebar). Routes appear on the streets
-to everything it imports and from everything that imports it. With a file selected, switching to
+to everything it imports and from everything that imports it. Every route leaves through the
+building's door, follows the alley to the street if it's a back door, and goes in through the other
+building's door. Alley stretches are drawn thinner. With a file selected, switching to
 **Walk** puts you at its door facing along the first route: follow the arrows.
 
 ## Tour and links

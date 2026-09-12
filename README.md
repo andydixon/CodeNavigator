@@ -16,7 +16,7 @@ indexing API and the browser frontend (plain ES modules and WebGL2, no build ste
 | ![2D map](docs/images/map-2d.png) | **2D map**: a squarified treemap of every file, sized by lines or references, with source code rendered right on the tiles as you zoom in. |
 | ![3D landscape](docs/images/landscape-3d.png) | **3D landscape**: the same map extruded, orbit, pan and dolly around it. |
 | ![Routes in the city](docs/images/city-routes.png) | **City**: folders become districts and blocks, files become buildings (footprint from lines, height from complexity, lit windows from definitions). Select a file to see its imports as cyan routes and its dependents as pulsing magenta routes along the streets. |
-| ![Walking the city](docs/images/city-walk.png) | **Walk and fly** at street level with signs on every wall, folder street signs on the corners, source code on the facade in front of you, wandering residents and a city wall covered in posters. |
+| ![Walking the city](docs/images/city-walk.png) | **Walk and fly** at street level past lit doorways, streetlights, bins, benches and trees, with signs on every wall, folder street signs on the corners, source code on the facade in front of you, wandering residents and a city wall covered in posters. |
 
 Also:
 

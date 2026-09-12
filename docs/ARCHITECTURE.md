@@ -77,17 +77,27 @@ Plain ES modules, no framework, no build step.
    nested pavements a few centimetres apart can't z-fight).
 2. **Buildings and wall:** instanced boxes. The city shader adds procedural windows (lit share from
    definition count), neon edges, a concrete wall and exponential fog.
-3. **Effects:** additive and never occluding. Search beacons, fire and smoke particles (stateless,
+3. **Doors and street furniture:** small instanced boxes (lit doorways, lamp posts and heads, bins,
+   benches, trees, hydrants, post boxes) drawn with a separate shader variant, and only within a few
+   hundred metres of the camera. Streetlights stand on folder boundaries, and everything sits on
+   folder pavements, never the road.
+4. **Effects:** additive and never occluding. Lamp light pools, search beacons, fire and smoke particles (stateless,
    animated in the vertex shader), residents (procedural stick-figure sprites), street routes
    (mitred ribbons with chevrons or pulsing dashes, kept in right-hand lanes) and import arcs.
-4. **Signs:** textured quads from the label atlas, depth-tested but not depth-writing. A shader test
+5. **Signs:** textured quads from the label atlas, depth-tested but not depth-writing. A shader test
    discards any quad face that would read mirrored, which is how two-faced blade signs work.
 
 ### Routing
 
-- **Grid:** a 3 m occupancy grid blocks buildings (grown by 0.5 m) and the city wall, and makes
-  pavements slightly dearer than roads.
-- **Search:** one Dijkstra run from the selected building's doors reaches every import and
+- **Grid:** a 3 m occupancy grid blocks buildings (grown by 2 m, so a ribbon in its lane can't clip a
+  wall) and the city wall, and makes pavements slightly dearer than roads.
+- **Doors:** each building gets one door, centred where possible and clear of its corners. Street
+  doors face the nearest open street. Buildings with no frontage get a back door whose path follows
+  a distance-to-street field computed once on a 0.5 m grid (chamfer sweeps until stable) through the
+  2.4 m alleys.
+- **Search:** one Dijkstra run from the selected building's doorstep reaches every import and
   dependent (paths cost the same both ways). It uses float64 distances and a settled set.
-- **Shaping:** routes are straightened by line-of-sight, extended into both buildings, and boxed-in
-  targets fall back to the nearest reachable street.
+- **Shaping:** street paths are straightened by line-of-sight (sampled every quarter cell), then joined
+  to each building's door path: inside the building, out through the doorway, along the alley, onto
+  the street. Alley points are drawn narrower and centred. Buildings with no door fall back to the
+  nearest reachable street.

@@ -481,7 +481,7 @@ export class LandscapeRenderer {
     this.codeTexture = gl.createTexture(); this.codeOn = false;
     this.anisotropy = gl.getExtension('EXT_texture_filter_anisotropic');
     this.cube = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, this.cube); gl.bufferData(gl.ARRAY_BUFFER, VERTICES, gl.STATIC_DRAW);
-    this.landscape = this.boxLayer(); this.cityLayer = this.boxLayer(); this.cityFloor = this.boxLayer(); this.glowLayer = this.boxLayer(); this.propLayer = this.boxLayer();
+    this.landscape = this.boxLayer(); this.cityLayer = this.boxLayer(); this.cityFloor = this.boxLayer(); this.glowLayer = this.boxLayer(); this.propLayer = this.boxLayer(); this.carLayer = this.boxLayer(); this.carGlow = this.boxLayer();
     this.signProgram = program(gl, SIGN_VS, SIGN_FS); this.signUniforms = uniformsOf(gl, this.signProgram);
     this.corners = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, this.corners); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
     this.signLayer = this.quadLayer(); this.facadeLayer = this.quadLayer(); this.posterLayer = this.quadLayer(); this.posterTexture = this.texture();
@@ -646,7 +646,7 @@ export class LandscapeRenderer {
     return c.view === 'heli' ? Math.min(6, Math.max(1, c.distance / 250)) : c.view === 'fly' ? Math.min(4, Math.max(1, c.ez / 120)) : 1;
   }
 
-  get animating() { return this.mode === 'city' && (this.trailLayer.count > 0 || this.routeLayer.count > 0 || this.wandererLayer.count > 0 || this.smokeLayer.count > 0); }
+  get animating() { return this.mode === 'city' && (this.trailLayer.count > 0 || this.routeLayer.count > 0 || this.wandererLayer.count > 0 || this.carLayer.count > 0 || this.smokeLayer.count > 0); }
 
   syncAtlas() {
     const gl = this.gl, atlas = this.atlas; if (!atlas) return;
@@ -701,6 +701,13 @@ export class LandscapeRenderer {
     const pack = LandscapeRenderer.packBoxes;
     this.upload(this.propLayer, pack(boxes.filter(b => b.kind !== KIND.pool)));
     this.upload(this.glowLayer, pack(boxes.filter(b => b.kind === KIND.pool)));
+  }
+
+  // Cars near the camera, uploaded every frame they move.
+  setCars(boxes) {
+    const pack = LandscapeRenderer.packBoxes;
+    this.upload(this.carLayer, pack(boxes.filter(b => b.kind !== KIND.pool)));
+    this.upload(this.carGlow, pack(boxes.filter(b => b.kind === KIND.pool)));
   }
 
   setCity(instances, bounds) {
@@ -820,11 +827,17 @@ export class LandscapeRenderer {
       gl.useProgram(this.propProgram); this.setCameraUniforms(p); gl.uniform1f(p.uAlpha, alpha);
       gl.uniform1f(p.uFogDensity, fog); gl.uniform3f(p.uFogColor, ...fogColor);
     };
-    if (city && this.propLayer.count) { useProps(); gl.bindVertexArray(this.propLayer.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, this.propLayer.count); gl.useProgram(this.cityProgram); }
+    const drawProps = (...layers) => {
+      if (!layers.some(l => l.count)) return;
+      useProps();
+      for (const l of layers) if (l.count) { gl.bindVertexArray(l.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, l.count); }
+      gl.useProgram(this.cityProgram);
+    };
+    if (city) drawProps(this.propLayer, this.carLayer);
     if (this.mode === 'city') {
       // Light effects add colour and never occlude: additive blending without depth writes.
       gl.depthMask(false); gl.blendFunc(gl.ONE, gl.ONE);
-      if (this.glowLayer.count) { useProps(); gl.bindVertexArray(this.glowLayer.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, this.glowLayer.count); gl.useProgram(this.cityProgram); }
+      drawProps(this.glowLayer, this.carGlow);
       if (this.beaconLayer.count) { gl.bindVertexArray(this.beaconLayer.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, this.beaconLayer.count); }
       if (this.smokeLayer.count) {
         // Camera-facing particles: the view matrix rows are the camera's right and up axes.

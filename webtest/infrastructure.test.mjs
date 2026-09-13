@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { layoutCity, buildNavGrid, routesFrom, assignDoors, routeThroughDoors, ribbonVertices, streetFurniture, furnitureBoxes, walkable, DOOR, seededRandom } from '../web/city.js';
+import { layoutCity, buildNavGrid, routesFrom, assignDoors, routeThroughDoors, ribbonVertices, streetFurniture, furnitureBoxes, walkable, DOOR, seededRandom, trafficLoops, spawnCars, carBoxes, carPose, stepCars, wallSigns } from '../web/city.js';
 
 const ROUTE_MARGIN = 2;
 function city() {
@@ -86,4 +86,39 @@ test('street furniture stays on pavements along folder edges, clear of buildings
     const b = light.block, edge = Math.min(light.x - b.x, b.x + b.w - light.x, light.y - b.y, b.y + b.h - light.y);
     assert.ok(Math.abs(edge - .5) < 1e-6, `light on the folder boundary line (${edge})`);
   }
+});
+
+test('cars stay on the grey streets, clear of buildings, furniture and each other', () => {
+  const { model, buildings } = city();
+  const cars = spawnCars(trafficLoops(model.blocks), seededRandom(3));
+  assert.ok(cars.length > 20, `some traffic (${cars.length})`);
+  const solids = streetFurniture(model.blocks, buildings, seededRandom(1)).flatMap(furnitureBoxes).filter(p => p.part === 'solid' && p.z < 1);
+  const overlaps = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+  const districts = model.blocks.filter(b => b.depth === 1);
+  for (let step = 0; step < 40; step++) {
+    const bodies = cars.map(car => { car.s += 3.7; return carBoxes(car).find(p => p.part === 'solid' && p.z === .3); });
+    bodies.forEach((body, i) => {
+      assert.ok(!buildings.some(b => overlaps(body, b)), 'not in a building');
+      assert.ok(!solids.some(p => overlaps(body, p)), 'not in furniture');
+      assert.ok(districts.some(d => body.x >= d.x && body.y >= d.y && body.x + body.w <= d.x + d.w && body.y + body.h <= d.y + d.h), 'never on the black ground');
+      for (let j = i + 1; j < bodies.length; j++) assert.ok(!overlaps(body, bodies[j]), 'cars never collide');
+    });
+  }
+});
+
+test('wall name signs sit clear above the doors', () => {
+  const { buildings } = city();
+  for (const b of buildings) for (const q of wallSigns(b, [b.x - 50, b.y - 50], 5)) assert.ok(q.c[2] - q.v[2] >= DOOR.height + 1, `sign bottom ${q.c[2] - q.v[2]}`);
+});
+
+test('cars wait for someone standing in the lane ahead', () => {
+  const { model } = city();
+  const cars = spawnCars(trafficLoops(model.blocks), seededRandom(3)), car = cars[0], { x, y, dir } = carPose(car);
+  const blocked = cars.filter(c => c.loop === car.loop), others = cars.find(c => c.loop !== car.loop);
+  const before = blocked.map(c => c.s), other = others.s;
+  stepCars(cars, 1, [x + dir[0] * 4, y + dir[1] * 4]);
+  assert.deepEqual(blocked.map(c => c.s), before);
+  assert.ok(others.s > other, 'other loops keep moving');
+  stepCars(cars, 1, [x - dir[0] * 4, y - dir[1] * 4]);
+  assert.ok(car.s > before[0], 'drives on once the way is clear');
 });

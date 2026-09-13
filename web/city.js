@@ -73,12 +73,13 @@ export function layoutCity(files, name = '') {
   const width = Math.sqrt(area * 1000 / 680), height = area / width;
   const buildings = new Map(), blocks = [];
   const visit = (node, x, y, w, h, depth) => {
+    let half = 0;
     if (depth > 0) {
       // Half a road on every side, so neighbouring blocks are a full road apart.
-      const half = Math.min(CITY.roadWidths[Math.min(depth - 1, CITY.roadWidths.length - 1)] / 2, w * .2, h * .2);
+      half = Math.min(CITY.roadWidths[Math.min(depth - 1, CITY.roadWidths.length - 1)] / 2, w * .2, h * .2);
       x += half; y += half; w -= half * 2; h -= half * 2;
     }
-    blocks.push({ node, depth, x, y, w, h });
+    blocks.push({ node, depth, x, y, w, h, road: half });
     const kerb = Math.min(CITY.sidewalk, w * .15, h * .15);
     const values = [...node.children.values(), ...node.files.map(file => ({ file, weight: Math.max(CITY.minLines, file.lines || 0) }))];
     const total = values.reduce((sum, value) => sum + value.weight, 0), floor = total / Math.max(1, values.length * 8);
@@ -234,8 +235,8 @@ function wallQuad(wall, z, width, height) {
   return { c: [wall.c[0] + wall.n[0] * offset, wall.c[1] + wall.n[1] * offset, z], u: [right[0] * width / 2, right[1] * width / 2, 0], v: [0, 0, height / 2] };
 }
 
-// Name signs at first-floor height on the walls that face the viewer.
-export function wallSigns(b, eye, aspect, height = .9, z = 3.2) {
+// Name signs on the walls that face the viewer, a clear metre and more above the top of the door.
+export function wallSigns(b, eye, aspect, height = .9, z = DOOR.height + 1.6) {
   const out = [];
   for (const wall of walls(b)) {
     if ((eye[0] - wall.c[0]) * wall.n[0] + (eye[1] - wall.c[1]) * wall.n[1] <= 0) continue;
@@ -244,7 +245,7 @@ export function wallSigns(b, eye, aspect, height = .9, z = 3.2) {
     const width = Math.min(segment * .85, aspect * height);
     for (let i = 0; i < count; i++) {
       const offset = (i + .5) * segment - wall.width / 2;
-      out.push(wallQuad({ ...wall, c: [wall.c[0] + along[0] * offset, wall.c[1] + along[1] * offset] }, Math.min(z, b.height * .5), width, width / aspect));
+      out.push(wallQuad({ ...wall, c: [wall.c[0] + along[0] * offset, wall.c[1] + along[1] * offset] }, Math.min(z, b.height - height), width, width / aspect));
     }
   }
   return out;
@@ -889,14 +890,18 @@ export function streetFurniture(blocks, buildings, random = Math.random) {
 
 // Boxes that draw a piece of furniture: { x, y, w, h, z, height, color, part } where part is
 // 'solid', 'lamp' (emissive) or 'pool' (a pool of light on the pavement).
-export function furnitureBoxes(item) {
-  const boxes = [], { x, y, out, along } = item;
-  const box = (ax, ay, sx, sy, z, height, color, part = 'solid') => {
-    // ax/ay are offsets along the edge and out towards the road; sx/sy sizes in those directions.
+// Box builder in a local frame at (x, y): ax/ay are offsets along `along` and `out` (axis-aligned
+// unit vectors), sx/sy sizes in those directions.
+function localBoxes(boxes, x, y, along, out) {
+  return (ax, ay, sx, sy, z, height, color, part = 'solid') => {
     const cx = x + along[0] * ax + out[0] * ay, cy = y + along[1] * ax + out[1] * ay;
     const w = Math.abs(along[0]) * sx + Math.abs(out[0]) * sy, h = Math.abs(along[1]) * sx + Math.abs(out[1]) * sy;
     boxes.push({ x: cx - w / 2, y: cy - h / 2, w, h, z, height, color, part });
   };
+}
+
+export function furnitureBoxes(item) {
+  const boxes = [], box = localBoxes(boxes, item.x, item.y, item.along, item.out);
   switch (item.type) {
     case 'light':
       box(0, 0, .18, .18, 0, 5.6, [.18, .18, .2]);
@@ -928,5 +933,73 @@ export function furnitureBoxes(item) {
       box(0, 0, .65, .65, 1.2, .14, [.6, .05, .05]);
       break;
   }
+  return boxes;
+}
+
+// ---- Traffic ----
+
+// Cars circle the blocks inside a folder, on its grey streets: one lane per block, half-way into the
+// road around it, driving with the kerb on their right. Top-level districts border the black ground
+// and get no traffic. Neighbouring blocks are a full road apart, so no two loops ever meet.
+export const TRAFFIC = { minRoad: 2.5, spacing: 55, length: 4.2, width: 1.8 };
+export function trafficLoops(blocks) {
+  return blocks.filter(b => b.depth > 1 && b.road >= TRAFFIC.minRoad).map(b => {
+    const o = b.road / 2, x0 = b.x - o, y0 = b.y - o, x1 = b.x + b.w + o, y1 = b.y + b.h + o;
+    // Clockwise, matching the furniture edges: right of travel (-dy, dx) points into the block.
+    const corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+    return { corners, length: 2 * (x1 - x0 + y1 - y0) };
+  });
+}
+
+// Cars on one loop share a speed and start evenly spaced, so they never catch each other up.
+export function spawnCars(loops, random = Math.random) {
+  const cars = [];
+  for (const loop of loops) {
+    const count = Math.floor(loop.length / TRAFFIC.spacing + random());
+    if (!count) continue;
+    const speed = 6 + random() * 6, start = random() * loop.length;
+    for (let i = 0; i < count; i++) cars.push({ loop, speed, s: start + i * loop.length / count, color: CAR_COLOURS[Math.floor(random() * CAR_COLOURS.length)] });
+  }
+  return cars;
+}
+const CAR_COLOURS = [[.75, .1, .1], [.1, .3, .7], [.85, .85, .8], [.12, .12, .14], [.9, .6, .1], [.2, .5, .35], [.5, .52, .55]];
+
+// Where a car is along its loop: position and axis-aligned travel direction.
+export function carPose(car) {
+  const { corners, length } = car.loop;
+  let s = ((car.s % length) + length) % length;
+  for (let i = 0; i < 4; i++) {
+    const a = corners[i], b = corners[(i + 1) % 4], edge = Math.abs(b[0] - a[0]) + Math.abs(b[1] - a[1]);
+    if (s <= edge || i === 3) {
+      const dir = [Math.sign(b[0] - a[0]), Math.sign(b[1] - a[1])], t = Math.min(s, edge);
+      return { x: a[0] + dir[0] * t, y: a[1] + dir[1] * t, dir };
+    }
+    s -= edge;
+  }
+}
+
+// Moves the traffic on. Cars stop for someone standing in the lane just ahead of them, and the rest
+// of that loop waits too, so nobody drives into the car in front.
+export function stepCars(cars, dt, eye = null) {
+  const waiting = new Set();
+  if (eye) for (const car of cars) {
+    const { x, y, dir } = carPose(car), ahead = (eye[0] - x) * dir[0] + (eye[1] - y) * dir[1];
+    if (ahead > 0 && ahead < TRAFFIC.length / 2 + 4 && Math.abs((eye[0] - x) * dir[1] - (eye[1] - y) * dir[0]) < TRAFFIC.width / 2 + .8) waiting.add(car.loop);
+  }
+  for (const car of cars) if (!waiting.has(car.loop)) car.s += car.speed * dt;
+}
+
+// Body, cabin, wheels, head and tail lights, and a pool of headlight on the road ahead.
+export function carBoxes(car) {
+  const { x, y, dir } = carPose(car), boxes = [], box = localBoxes(boxes, x, y, dir, [-dir[1], dir[0]]);
+  const { length: l, width: w } = TRAFFIC, dark = [.05, .05, .06];
+  for (const ax of [-l * .3, l * .3]) box(ax, 0, .7, w + .1, 0, .6, dark);
+  box(0, 0, l, w, .3, .75, car.color);
+  box(-l * .08, 0, l * .5, w * .88, 1.05, .6, car.color.map(c => c * .7));
+  for (const ay of [-w * .32, w * .32]) {
+    box(l / 2, ay, .08, .38, .65, .22, [1, .95, .8], 'lamp');
+    box(-l / 2, ay, .08, .38, .65, .2, [.9, .05, .04], 'lamp');
+  }
+  box(l / 2 + 4, 0, 7, 7, .42, .02, [.9, .88, .75], 'pool');
   return boxes;
 }

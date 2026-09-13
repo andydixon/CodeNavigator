@@ -1,5 +1,5 @@
 import { LandscapeRenderer, KIND } from './renderer.js';
-import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, flatQuad, wallSigns, folderBlades, folderLabel, facadeQuad, heading, tourStops, encodePlace, decodePlace, joystick, buildNavGrid, routesFrom, spawnWanderers, stepWanderers, alertsByPath, burns, tapeQuads, cityWalls, posterQuads, seededRandom, WALL, ROUTE_KIND, enterBuilding, assignDoors, routeThroughDoors, streetFurniture, furnitureBoxes, DOOR, MOVE } from './city.js';
+import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, flatQuad, wallSigns, folderBlades, folderLabel, facadeQuad, heading, tourStops, encodePlace, decodePlace, joystick, buildNavGrid, routesFrom, spawnWanderers, stepWanderers, alertsByPath, burns, tapeQuads, cityWalls, posterQuads, seededRandom, WALL, ROUTE_KIND, enterBuilding, assignDoors, routeThroughDoors, streetFurniture, furnitureBoxes, DOOR, MOVE, trafficLoops, spawnCars, carBoxes, stepCars } from './city.js';
 import { LabelAtlas, PosterAtlas } from './labels.js';
 import { personFor, residentSeed, drawPortrait } from './people.js';
 import { apiFetch, progressEvents } from './api.mjs';
@@ -47,7 +47,7 @@ let searchHits=[];
 let expandedCoverageLayer=null;
 let coverageActiveIndex=-1;
 let cameraAnimation=null;
-let cityFurniture=[],propState={key:''};
+let cityFurniture=[],propState={key:''},cars=[];
 let cityModel=null,cityEntries=[],cityIndex=null,collisionIndex=null,cityWallBoxes=[],cityFitted=false,cityDistricts=[],cityFolders=[],navGrid=null,cityRoutes=[],wanderers=[],showResidents=true;
 let currentSnapshot=null;
 let currentName='';
@@ -151,6 +151,7 @@ function computeCity(){
   cityFurniture=[...doorBoxes.map(box=>({x:box.x+box.w/2,y:box.y+box.h/2,boxes:[box]})),...furniture.map(item=>({x:item.x,y:item.y,boxes:furnitureBoxes(item).map(part=>({...part,kind:part.part==='pool'?KIND.pool:part.part==='lamp'?KIND.lamp:KIND.prop,lit:part.z}))}))];
   for(const item of cityFurniture)for(const part of item.boxes)if(part.kind===KIND.prop&&part.z<1)obstacles.push({x:part.x,y:part.y,w:part.w,h:part.h,height:part.height});
   propState.key='';
+  cars=spawnCars(trafficLoops(cityModel.blocks),seededRandom(furnitureSeed^0x5bd1e995));
   collisionIndex=spatialIndex([...cityEntries,...cityWallBoxes,...obstacles]);
   updateFires();
   spawnResidents();
@@ -827,10 +828,12 @@ function drawResidentTag(ctx){
 }
 // Street furniture is only uploaded near where you're looking: from high up it is sub-pixel, and
 // thousands of small boxes are costly to draw everywhere at once.
-function updateProps(){
+function propRange(){
   const c=renderer.city,heli=c.view==='heli';
-  const radius=heli?(c.distance>600?0:Math.min(400,Math.max(150,c.distance*.9))):320;
-  const focus=heli?[c.x,c.y]:[c.ex,c.ey],key=radius?[Math.round(focus[0]/40),Math.round(focus[1]/40),Math.round(radius/100)].join():'none';
+  return {radius:heli?(c.distance>600?0:Math.min(400,Math.max(150,c.distance*.9))):320,focus:heli?[c.x,c.y]:[c.ex,c.ey]};
+}
+function updateProps(){
+  const {radius,focus}=propRange(),key=radius?[Math.round(focus[0]/40),Math.round(focus[1]/40),Math.round(radius/100)].join():'none';
   if(key===propState.key)return;
   propState.key=key;
   const boxes=[];
@@ -988,6 +991,19 @@ function updateResidents(seconds){
   if(residentBuffer.length!==wanderers.length*4)residentBuffer=new Float32Array(wanderers.length*4);
   wanderers.forEach((w,i)=>residentBuffer.set([w.x,w.y,w.phase,w.seed],i*4));
   renderer.setWanderers(residentBuffer);
+}
+
+// Traffic always moves, but only cars near the camera are built and uploaded (like furniture).
+function updateCars(seconds){
+  const {radius,focus}=propRange(),boxes=[],c=renderer.city;
+  // Only someone at street level can stand in a car's way.
+  stepCars(cars,seconds,c.view!=='heli'&&c.ez<3?[c.ex,c.ey]:null);
+  if(radius)for(const car of cars){
+    const [min,,max]=car.loop.corners;
+    if(Math.max(min[0]-focus[0],focus[0]-max[0],min[1]-focus[1],focus[1]-max[1])>radius)continue;
+    for(const part of carBoxes(car))boxes.push({...part,kind:part.part==='pool'?KIND.pool:part.part==='lamp'?KIND.lamp:KIND.prop,lit:part.z});
+  }
+  if(boxes.length||renderer.carLayer.count)renderer.setCars(boxes);
 }
 
 // ---- Security alerts from GitHub: burning buildings, hazard tape and inspector details ----
@@ -1253,12 +1269,14 @@ function animate(now){
   if(renderer.mode==='city'&&renderer.city.view!=='heli'&&!cameraAnimation&&(heldKeys.size||touchMove.forward||touchMove.right))stepCity(frameSeconds);
   if(tour)advanceTour(now,frameSeconds);
   if(renderer.mode==='city'&&wanderers.length)updateResidents(frameSeconds);
+  if(renderer.mode==='city')updateCars(frameSeconds);
   if(cameraAnimation){
     const progress=Math.min(1,(now-cameraAnimation.start)/cameraAnimation.duration),eased=1-(1-progress)**4;
     for(const key of Object.keys(cameraAnimation.to))cameraAnimation.camera[key]=cameraAnimation.from[key]+(cameraAnimation.to[key]-cameraAnimation.from[key])*eased;
     if(progress>=1)cameraAnimation=null;dirty=true;
   }
   if(renderer.animating)dirty=true;
+  hideStaleTooltip();
   if(dirty){
     // The overlay fills the code overview, so draw it before the GPU pass that samples it.
     renderer.resize();drawOverlay();renderer.codeOn=showCode;renderer.render();dirty=codeTexturesPending;
@@ -1313,8 +1331,16 @@ viewport.addEventListener('pointermove',event=>{
     else{renderer.camera.yaw-=dx*.007;renderer.camera.pitch=Math.max(.045,Math.min(1.525,renderer.camera.pitch+dy*.006));}
     dirty=true;$('#tooltip').hidden=true;return;
   }
-  const item=pickAt(x,y),tip=$('#tooltip');if(item){tip.hidden=false;tip.style.left=`${Math.min(viewport.clientWidth-320,x+13)}px`;tip.style.top=`${Math.min(viewport.clientHeight-70,y+13)}px`;tip.innerHTML=`${escapeHtml(item.name)}<small>${escapeHtml(item.path)} · ${format(item.lines)} lines</small>`;}else tip.hidden=true;
+  const item=pickAt(x,y),tip=$('#tooltip');if(item){tip.hidden=false;tipView=viewKey();tip.style.left=`${Math.min(viewport.clientWidth-320,x+13)}px`;tip.style.top=`${Math.min(viewport.clientHeight-70,y+13)}px`;tip.innerHTML=`${escapeHtml(item.name)}<small>${escapeHtml(item.path)} · ${format(item.lines)} lines</small>`;}else tip.hidden=true;
 });
+// The hover tooltip belongs to the view it was shown in: any camera move, view or mode change, or
+// mouse-look hides it, since none of those send a pointermove to update it.
+let tipView='';
+const viewKey=()=>renderer.mode+JSON.stringify(renderer.mode==='city'?renderer.city:renderer.camera);
+function hideStaleTooltip(){
+  const tip=$('#tooltip');
+  if(!tip.hidden&&(document.pointerLockElement||viewKey()!==tipView))tip.hidden=true;
+}
 function finishPointer(event){
   if(event.pointerType==='touch')endTouch(event);
   if(!pointer.down||event.pointerId!==pointer.id)return;

@@ -80,7 +80,9 @@ Plain ES modules, no framework, no build step.
 3. **Doors and street furniture:** small instanced boxes (lit doorways, lamp posts and heads, bins,
    benches, trees, hydrants, post boxes) drawn with a separate shader variant, and only within a few
    hundred metres of the camera. Streetlights stand on folder boundaries, and everything sits on
-   folder pavements, never the road.
+   folder pavements, never the road. Cars use the same shader: each block inside a folder has a
+   one-lane loop half-way into the street around it, and only cars near the camera are rebuilt
+   each frame.
 4. **Effects:** additive and never occluding. Lamp light pools, search beacons, fire and smoke particles (stateless,
    animated in the vertex shader), residents (procedural stick-figure sprites), street routes
    (mitred ribbons with chevrons or pulsing dashes, kept in right-hand lanes) and import arcs.

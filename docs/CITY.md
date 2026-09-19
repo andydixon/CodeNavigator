@@ -24,6 +24,7 @@ scale, so a large repository is a large city.
 | **Lit doorway** | The building's door: facing the street, or a back door onto an alley for files in the middle of a folder |
 | **Streetlights** with pools of light | The edges of each folder: lights stand on its boundary, at every corner and every 20 m or so |
 | **Bins, benches, trees, hydrants, post boxes** | Street furniture on the folder's pavement. Purely for atmosphere |
+| **Cars** | Traffic circling the blocks inside each folder, on its grey streets (never on the black ground between districts). They drive on the right and stop for you if you stand in their lane. Purely for atmosphere |
 | **Cyan chevrons** on the road | Route to a file the selected file imports (**amber** if the import was inferred) |
 | **Pulsing magenta dashes** on the road | Route from a file that imports the selected file |
 | **Arcs** in the sky | The same import relationships, as the crow flies |

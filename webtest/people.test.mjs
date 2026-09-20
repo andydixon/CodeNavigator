@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Andy Dixon
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { personFor, residentSeed, NAMES, OCCUPATIONS, EMPLOYERS, BLOOD_TYPES, EYE_COLOURS, HAIR_COLOURS } from '../web/people.js';

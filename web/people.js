@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Andy Dixon
 // Residents' identities. Everything is derived from a seed, so the same resident is always the same
 // person. Name data from nymshift's England/Wales name set; occupations and the rest from its taxonomy.
 import { seededRandom } from './city.js';

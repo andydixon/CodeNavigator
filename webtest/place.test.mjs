@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Andy Dixon
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { tourStops, encodePlace, decodePlace, joystick } from '../web/city.js';

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Andy Dixon
 // Code as a city: folders become districts and blocks separated by roads, files become buildings.
 // Everything here is plain data and maths in metres, so it can be tested without a browser.
 

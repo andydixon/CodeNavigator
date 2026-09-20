@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Andy Dixon
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { layoutCity, buildNavGrid, routesFrom, assignDoors, routeThroughDoors, ribbonVertices, streetFurniture, furnitureBoxes, walkable, DOOR, seededRandom, trafficLoops, spawnCars, carBoxes, carPose, stepCars, wallSigns } from '../web/city.js';

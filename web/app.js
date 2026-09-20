@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Andy Dixon
 import { LandscapeRenderer, KIND } from './renderer.js';
 import { layoutCity, squarifiedLayout, spatialIndex, pickRay, stepCamera, collide, blockAt, groundHit, flatQuad, wallSigns, folderBlades, folderLabel, facadeQuad, heading, tourStops, encodePlace, decodePlace, joystick, buildNavGrid, routesFrom, spawnWanderers, stepWanderers, alertsByPath, burns, tapeQuads, cityWalls, posterQuads, seededRandom, WALL, ROUTE_KIND, enterBuilding, assignDoors, routeThroughDoors, streetFurniture, furnitureBoxes, DOOR, MOVE, trafficLoops, spawnCars, carBoxes, stepCars } from './city.js';
 import { LabelAtlas, PosterAtlas } from './labels.js';

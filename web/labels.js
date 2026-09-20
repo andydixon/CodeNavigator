@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Andy Dixon
 // Text for the 3D city: labels are rasterised once into a shared atlas and drawn as textured quads,
 // so signs are depth-tested against buildings instead of floating over them like DOM or 2D overlays.
 

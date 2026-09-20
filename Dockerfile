@@ -10,6 +10,7 @@ FROM alpine:3.22
 # git is needed at runtime to clone GitHub repositories.
 RUN apk add --no-cache git ca-certificates && adduser -D -H app
 COPY --from=build /codenavigator /usr/local/bin/codenavigator
+COPY LICENSE /usr/share/licenses/codenavigator/LICENSE
 USER app
 ENV PORT=4177
 EXPOSE 4177

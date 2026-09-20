@@ -77,3 +77,15 @@ docker run --rm -p 4177:4177 codenavigator:latest
 - [GitHub App setup](docs/GITHUB_APP.md): private repos and security alerts
 - [Deployment](docs/DEPLOYMENT.md): Docker, systemd, nginx, operating limits
 - [Development](docs/DEVELOPMENT.md): running, testing, benchmarking, project layout
+
+## License
+
+Copyright (C) 2026 Andy Dixon
+
+CodeNavigator is free software: you can redistribute it and/or modify it under the terms of the
+GNU General Public License as published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version. It is distributed WITHOUT ANY WARRANTY; see
+[LICENSE](LICENSE) for the full text.
+
+The bundled fonts in `web/fonts/` (Archivo Black, Atkinson Hyperlegible, Space Mono) are licensed
+under the SIL Open Font License 1.1; see [web/fonts/OFL.txt](web/fonts/OFL.txt).

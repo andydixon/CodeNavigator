@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+   Copyright (C) 2026 Andy Dixon */
 /* CodeNavigator: a hand-cut dev zine. Flat ink, hard edges, stickers, a little chaos. */
 @font-face { font-family: "Archivo Black"; font-weight: 400; font-display: swap; src: url("./fonts/archivo-black.woff2") format("woff2"); }
 @font-face { font-family: "Atkinson Hyperlegible"; font-weight: 400; font-display: swap; src: url("./fonts/atkinson-400.woff2") format("woff2"); }

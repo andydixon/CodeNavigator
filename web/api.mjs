@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Andy Dixon
 export function apiFetch(url, options = {}) {
   const headers = new Headers(options.headers);
   headers.set('ngrok-skip-browser-warning', 'true');

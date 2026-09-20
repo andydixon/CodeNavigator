@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Andy Dixon
 // Minimal column-major 4x4 matrix helpers and the cameras built on them. World axes: x right,
 // y "down" the 2D map, z up. Every 3D view renders and projects through one view-projection
 // matrix, so WebGL, the overlay and picking agree exactly.

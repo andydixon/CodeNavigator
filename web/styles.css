@@ -111,6 +111,11 @@ kbd { display: inline-block; min-width: 18px; padding: 0 4px; border: 2px solid 
 .welcome p { max-width: 540px; margin: 20px 0 0; color: var(--muted); font-size: 16px; line-height: 1.6; }
 .welcome p b { color: var(--paper); }
 .welcome-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-top: 30px; color: var(--dim); font: 11px var(--mono); }
+.welcome-oss { display: grid; grid-template-columns: auto 1fr; column-gap: 12px; align-items: center; margin-top: 22px; padding: 9px 14px; border: 2px solid var(--black); border-radius: 8px; background: var(--sky); color: var(--black); box-shadow: var(--hard); text-decoration: none; font: 400 14px var(--display); transform: rotate(-1.5deg); transition: transform .1s, box-shadow .1s, background-color .1s; }
+.welcome-oss svg { grid-row: span 2; width: 30px; height: 30px; animation: bob 3.2s ease-in-out infinite; }
+.welcome-oss b { font-weight: 400; background: var(--pink); padding: 0 .2em; }
+.welcome-oss small { font: 700 10px var(--mono); text-transform: uppercase; letter-spacing: .06em; }
+.welcome-oss:hover { background: var(--lime); box-shadow: var(--hard-lg); transform: translate(-2px, -2px) rotate(1deg); }
 .welcome-features { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 38px; }
 .welcome-features span { padding: 5px 10px; border: 2px solid var(--line); border-radius: 999px; color: var(--muted); font: 700 11px var(--mono); }
 .welcome-features span:nth-child(4n+1) { border-color: var(--lime); transform: rotate(-2deg); }
